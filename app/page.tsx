@@ -1422,7 +1422,7 @@ export default function Home() {
       </section>
 
       {showResultModal && result && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/72 px-4 py-6 backdrop-blur-xl">
+   <div className="relative max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl overflow-y-auto overscroll-contain rounded-[1.8rem] border border-white/10 bg-[#0e1915] p-4 text-white shadow-[0_40px_150px_rgba(0,0,0,0.65)] md:max-h-[calc(100dvh-3rem)] md:rounded-[2.5rem] md:p-8">
           <div className="relative w-full max-w-5xl overflow-hidden rounded-[2.5rem] border border-white/10 bg-[#0e1915] p-5 text-white shadow-[0_40px_150px_rgba(0,0,0,0.65)] md:p-8">
             <div className="pointer-events-none absolute -left-28 -top-28 h-72 w-72 rounded-full bg-lime-300/14 blur-3xl" />
             <div className="pointer-events-none absolute -bottom-28 -right-28 h-80 w-80 rounded-full bg-emerald-300/12 blur-3xl" />
@@ -1560,7 +1560,7 @@ export default function Home() {
                   Oy vermek zorunlu değildir. İsterseniz topluluk teyidine katkı sağlayabilirsiniz.
                 </p>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-4">
+             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <button
                     onClick={() => handleVote("guvenli")}
                     disabled={voteLoading}
