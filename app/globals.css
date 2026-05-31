@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3efe7;
+  --foreground: #101915;
+  --surface: #ffffff;
+  --surface-soft: #f7f3eb;
+  --primary: #101915;
+  --primary-soft: #23342c;
+  --accent: #bef264;
+  --muted: #6f746f;
+  --line: rgba(16, 25, 21, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 14% 0%, rgba(190, 242, 100, 0.22), transparent 30%),
+    radial-gradient(circle at 92% 18%, rgba(16, 185, 129, 0.16), transparent 28%),
+    radial-gradient(circle at 48% 100%, rgba(125, 211, 252, 0.12), transparent 34%),
+    var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+input,
+textarea,
+button,
+select {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  color: var(--foreground);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgba(16, 25, 21, 0.36);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.guven-akis {
+  animation: guvenAkis 18s linear infinite;
+}
+
+.yumusak-giris {
+  animation: yumusakGiris 0.55s ease both;
+}
+
+.guven-parlama {
+  animation: guvenParlama 2.4s ease-in-out infinite;
+}
+
+.guven-yuzme {
+  animation: guvenYuzme 6s ease-in-out infinite;
+}
+
+@keyframes guvenAkis {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes yumusakGiris {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes guvenParlama {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes guvenYuzme {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    background:
+      radial-gradient(circle at 10% 0%, rgba(190, 242, 100, 0.2), transparent 34%),
+      radial-gradient(circle at 90% 8%, rgba(16, 185, 129, 0.12), transparent 30%),
+      var(--background);
+  }
+}
