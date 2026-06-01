@@ -295,6 +295,7 @@ export default function Home() {
 
   const [showIntro, setShowIntro] = useState(true);
   const [introStep, setIntroStep] = useState(0);
+  const [queryStarted, setQueryStarted] = useState(false);
   const [step, setStep] = useState(1);
 
   const [productCategory, setProductCategory] = useState("Elektronik");
@@ -378,6 +379,7 @@ const [pendingFinishMessage, setPendingFinishMessage] = useState("");
         setOutsidePayment(Boolean(draft.outsidePayment));
         setPressure(Boolean(draft.pressure));
         setNoRiskSigns(Boolean(draft.noRiskSigns));
+        setQueryStarted(Boolean(draft.queryStarted ?? true));
         setStep(draft.step ?? 7);
       } catch {
         localStorage.removeItem(DRAFT_KEY);
@@ -419,12 +421,14 @@ const [pendingFinishMessage, setPendingFinishMessage] = useState("");
         outsidePayment,
         pressure,
         noRiskSigns,
+        queryStarted,
         step,
       })
     );
   }
 
   function resetForm() {
+    setQueryStarted(false);
     setStep(1);
     setProductCategory("Elektronik");
     setPlatform("");
@@ -582,6 +586,17 @@ const [pendingFinishMessage, setPendingFinishMessage] = useState("");
   function goBack() {
     setErrorMessage("");
     setStep((current) => Math.max(current - 1, 1));
+  }
+
+  function startQuery() {
+    setQueryStarted(true);
+
+    setTimeout(() => {
+      document.getElementById("sorgu-paneli")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 100);
   }
 
   async function createHash(value: string): Promise<string | null> {
@@ -2054,25 +2069,64 @@ async function submitFeedback() {
             </div>
           </nav>
 
-          <div className="mx-auto max-w-4xl pb-5 pt-6 text-center md:pb-8 md:pt-14">
+          <div className="mx-auto max-w-4xl pb-6 pt-8 text-center md:pb-10 md:pt-16">
             <div className="mx-auto inline-flex items-center gap-2 rounded-full border border-lime-300/20 bg-lime-300/10 px-4 py-2 text-xs font-black text-lime-200">
               <span className="h-2 w-2 rounded-full bg-lime-300 shadow-[0_0_18px_rgba(190,242,100,0.85)]" />
-              6 kısa soru sonra risk sonucu hazırlanır
+              Ücretsiz • 1 dakikadan kısa • 6 kısa soru
             </div>
 
-            <h1 className="mx-auto mt-4 max-w-3xl text-3xl font-black leading-[0.95] tracking-[-0.075em] md:mt-6 md:text-7xl">
-              Satıcı güvenli mi?
+            <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-black leading-[0.92] tracking-[-0.075em] md:mt-7 md:text-7xl">
+              Ödeme yapmadan önce satıcıyı kontrol et
             </h1>
 
-            <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-white/76 md:mt-5 md:text-base md:leading-7">
-              Birkaç kısa sorudan sonra risk sonucunu görün.
+            <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-white/78 md:mt-5 md:text-lg md:leading-8">
+              Instagram, Sahibinden, Dolap veya herhangi bir satıcıdan ürün almadan önce risk durumunu gör.
             </p>
+
+            {!queryStarted && (
+              <div className="mx-auto mt-8 max-w-xl">
+                <button
+                  onClick={startQuery}
+                  className="w-full rounded-[1.7rem] bg-lime-300 px-6 py-5 text-base font-black text-[#06100d] shadow-[0_20px_70px_rgba(190,242,100,0.24)] transition hover:bg-white md:text-lg"
+                >
+                  Sorguya Başla
+                </button>
+
+                <p className="mt-4 text-xs leading-5 text-white/62">
+                  Satıcı bilgilerini gir, kısa soruları cevapla, düşük / orta / yüksek risk sonucunu gör.
+                </p>
+
+                <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.07] p-4">
+                    <p className="text-sm font-black text-white">1. Bilgi gir</p>
+                    <p className="mt-1 text-xs leading-5 text-white/64">
+                      Telefon, IBAN veya kullanıcı adı.
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.07] p-4">
+                    <p className="text-sm font-black text-white">2. Soruları cevapla</p>
+                    <p className="mt-1 text-xs leading-5 text-white/64">
+                      Kapora, fiyat ve satıcı davranışı.
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.07] p-4">
+                    <p className="text-sm font-black text-white">3. Riski gör</p>
+                    <p className="mt-1 text-xs leading-5 text-white/64">
+                      Sonuca göre karar ver.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          <section
-            id="sorgu-paneli"
-            className="mx-auto max-w-4xl overflow-hidden rounded-[1.9rem] border border-white/12 bg-[#0e1915] p-4 text-white shadow-[0_34px_140px_rgba(0,0,0,0.48)] md:rounded-[2.6rem] md:p-7"
-          >
+          {queryStarted && (
+            <section
+              id="sorgu-paneli"
+              className="mx-auto max-w-4xl overflow-hidden rounded-[1.9rem] border border-white/12 bg-[#0e1915] p-4 text-white shadow-[0_34px_140px_rgba(0,0,0,0.48)] md:rounded-[2.6rem] md:p-7"
+            >
             <div className="mb-6">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs font-black uppercase tracking-[0.18em] text-white/70">
@@ -2129,7 +2183,8 @@ async function submitFeedback() {
                 </button>
               )}
             </div>
-          </section>
+            </section>
+          )}
 
           <div className="mx-auto mt-5 grid max-w-4xl gap-3 pb-10 text-sm text-white/76 md:grid-cols-3">
             <div className="rounded-2xl border border-white/12 bg-white/[0.095] p-4 backdrop-blur">
