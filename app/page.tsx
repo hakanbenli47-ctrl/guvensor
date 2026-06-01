@@ -321,7 +321,14 @@ export default function Home() {
   const [analysisStep, setAnalysisStep] = useState(0);
   const [showResultModal, setShowResultModal] = useState(false);
   const [finishMessage, setFinishMessage] = useState("");
-
+const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+const [feedbackRating, setFeedbackRating] = useState(0);
+const [feedbackHelpfulness, setFeedbackHelpfulness] = useState<
+  "yardimci_oldu" | "kismen" | "yetersiz" | ""
+>("");
+const [feedbackComment, setFeedbackComment] = useState("");
+const [feedbackLoading, setFeedbackLoading] = useState(false);
+const [pendingFinishMessage, setPendingFinishMessage] = useState("");
   const selectedIdentifier = useMemo(() => {
     return (
       identifierOptions.find((item) => item.key === identifierKind) ??
@@ -1289,15 +1296,66 @@ export default function Home() {
     }
   }
 
-  function completeQuery(message: string) {
-    setShowResultModal(false);
-    resetForm();
-    setFinishMessage(message);
+ function completeQuery(message: string) {
+  setPendingFinishMessage(message);
+  setShowResultModal(false);
+  setShowFeedbackModal(true);
+}
 
-    setTimeout(() => {
-      setFinishMessage("");
-    }, 3600);
+function closeFeedbackAndReset(message?: string) {
+  setShowFeedbackModal(false);
+  setFeedbackRating(0);
+  setFeedbackHelpfulness("");
+  setFeedbackComment("");
+
+  resetForm();
+
+  setFinishMessage(
+    message ||
+      pendingFinishMessage ||
+      "Sorgulamanız tamamlandı. Umarız karar vermenize yardımcı olmuştur."
+  );
+
+  setPendingFinishMessage("");
+
+  setTimeout(() => {
+    setFinishMessage("");
+  }, 3600);
+}
+
+async function submitFeedback() {
+  if (!user || !result?.queryId) {
+    closeFeedbackAndReset();
+    return;
   }
+
+  if (!feedbackRating || !feedbackHelpfulness) {
+    closeFeedbackAndReset();
+    return;
+  }
+
+  setFeedbackLoading(true);
+
+  const { error } = await supabase.from("feedbacks").insert({
+    user_id: user.id,
+    query_id: result.queryId,
+    rating: feedbackRating,
+    helpfulness: feedbackHelpfulness,
+    comment: feedbackComment.trim() || null,
+  });
+
+  setFeedbackLoading(false);
+
+  if (error) {
+    console.error(error);
+    closeFeedbackAndReset(
+      "Sorgunuz tamamlandı. Geri bildiriminiz kaydedilemedi ama sorun değil."
+    );
+    return;
+  }
+
+  closeFeedbackAndReset("Teşekkürler. Geri bildiriminiz kaydedildi.");
+}
 
   async function handleVote(voteType: VoteType) {
     if (!user || !result?.queryId) return;
@@ -1852,7 +1910,101 @@ export default function Home() {
           {finishMessage}
         </div>
       )}
+{showFeedbackModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-xl">
+    <div className="relative w-full max-w-[520px] overflow-hidden rounded-[2rem] border border-white/10 bg-[#0e1915] p-5 text-white shadow-[0_40px_140px_rgba(0,0,0,0.65)] md:p-6">
+      <div className="pointer-events-none absolute -left-24 -top-24 h-64 w-64 rounded-full bg-lime-300/16 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -right-24 h-72 w-72 rounded-full bg-emerald-300/12 blur-3xl" />
 
+      <div className="relative">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-lime-300 text-2xl text-[#06100d]">
+          🛡️
+        </div>
+
+        <h2 className="mt-5 text-2xl font-black tracking-[-0.05em] md:text-3xl">
+          Bu sorgu size yardımcı oldu mu?
+        </h2>
+
+        <p className="mt-2 text-sm leading-6 text-white/72">
+          GüvenSor’u daha doğru hale getirmek için kısa bir geri bildirim bırakabilirsiniz.
+        </p>
+
+        <div className="mt-5 grid gap-2 sm:grid-cols-3">
+          {[
+            { key: "yardimci_oldu", label: "Yardımcı oldu" },
+            { key: "kismen", label: "Kısmen" },
+            { key: "yetersiz", label: "Yeterli değildi" },
+          ].map((item) => (
+            <button
+              key={item.key}
+              onClick={() =>
+                setFeedbackHelpfulness(
+                  item.key as "yardimci_oldu" | "kismen" | "yetersiz"
+                )
+              }
+              className={`rounded-2xl border px-4 py-3 text-sm font-black transition ${
+                feedbackHelpfulness === item.key
+                  ? "border-lime-300/70 bg-lime-300 text-[#06100d]"
+                  : "border-white/12 bg-white/[0.08] text-white hover:bg-white/[0.14]"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-white/[0.07] p-4">
+          <p className="text-sm font-black text-white">
+            GüvenSor deneyiminizi puanlar mısınız?
+          </p>
+
+          <div className="mt-3 flex gap-2">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                onClick={() => setFeedbackRating(star)}
+                className={`text-3xl transition ${
+                  feedbackRating >= star
+                    ? "text-lime-300"
+                    : "text-white/24 hover:text-white/55"
+                }`}
+                aria-label={`${star} yıldız`}
+              >
+                ★
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <textarea
+          value={feedbackComment}
+          onChange={(e) => setFeedbackComment(e.target.value)}
+          placeholder="İsterseniz eksik gördüğünüz şeyi yazabilirsiniz."
+          rows={4}
+          className="mt-4 w-full resize-none rounded-[1.5rem] border border-white/12 bg-[#243a31] px-4 py-4 text-sm font-semibold leading-6 text-white outline-none placeholder:text-white/55 focus:border-lime-300/60"
+        />
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <button
+            onClick={() => closeFeedbackAndReset()}
+            disabled={feedbackLoading}
+            className="rounded-full border border-white/12 px-5 py-3 text-sm font-black text-white/78 transition hover:bg-white hover:text-[#06100d] disabled:opacity-60"
+          >
+            Atla
+          </button>
+
+          <button
+            onClick={submitFeedback}
+            disabled={feedbackLoading}
+            className="rounded-full bg-lime-300 px-5 py-3 text-sm font-black text-[#06100d] transition hover:bg-white disabled:opacity-60"
+          >
+            {feedbackLoading ? "Kaydediliyor..." : "Gönder"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
       <section className="relative min-h-screen overflow-hidden">
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute left-[-180px] top-[-140px] h-[460px] w-[460px] rounded-full bg-lime-300/20 blur-3xl" />
