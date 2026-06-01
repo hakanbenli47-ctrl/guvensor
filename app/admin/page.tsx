@@ -41,6 +41,16 @@ type AdminVote = {
   created_at: string | null;
 };
 
+type AdminFeedback = {
+  id: string;
+  user_id: string | null;
+  query_id: string | null;
+  rating: number | null;
+  helpfulness: string | null;
+  comment: string | null;
+  created_at: string | null;
+};
+
 function formatDate(value: string | null) {
   if (!value) return "—";
 
@@ -61,6 +71,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [queries, setQueries] = useState<AdminQuery[]>([]);
   const [votes, setVotes] = useState<AdminVote[]>([]);
+  const [feedbacks, setFeedbacks] = useState<AdminFeedback[]>([]);
 
   const riskRate = useMemo(() => {
     if (!stats || stats.total_queries === 0) return 0;
@@ -112,6 +123,7 @@ export default function AdminPage() {
     setUsers([]);
     setQueries([]);
     setVotes([]);
+    setFeedbacks([]);
   }
 
   async function checkAdmin() {
@@ -143,22 +155,30 @@ export default function AdminPage() {
         usersResponse,
         queriesResponse,
         votesResponse,
+        feedbacksResponse,
       ] = await Promise.all([
         supabase.rpc("admin_dashboard_stats"),
         supabase.rpc("admin_recent_users"),
         supabase.rpc("admin_recent_queries"),
         supabase.rpc("admin_recent_votes"),
+        supabase
+          .from("feedbacks")
+          .select("id, user_id, query_id, rating, helpfulness, comment, created_at")
+          .order("created_at", { ascending: false })
+          .limit(50),
       ]);
 
       if (statsResponse.error) throw statsResponse.error;
       if (usersResponse.error) throw usersResponse.error;
       if (queriesResponse.error) throw queriesResponse.error;
       if (votesResponse.error) throw votesResponse.error;
+      if (feedbacksResponse.error) throw feedbacksResponse.error;
 
       setStats((statsResponse.data?.[0] as Stats) ?? null);
       setUsers((usersResponse.data as AdminUser[]) ?? []);
       setQueries((queriesResponse.data as AdminQuery[]) ?? []);
       setVotes((votesResponse.data as AdminVote[]) ?? []);
+      setFeedbacks((feedbacksResponse.data as AdminFeedback[]) ?? []);
     } catch (error) {
       console.error(error);
       setErrorText("Admin verileri alınamadı. SQL fonksiyonlarını ve yetki ayarlarını kontrol edin.");
@@ -486,6 +506,90 @@ export default function AdminPage() {
                   <tr>
                     <td className="py-6 text-white/50" colSpan={7}>
                       Henüz sorgu görünmüyor.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-[2rem] border border-white/10 bg-white/[0.06] p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black">Kullanıcı geri dönüşleri</h2>
+              <p className="mt-1 text-sm text-white/50">
+                Kullanıcıların sorgu tamamlandıktan sonra verdiği puan ve yorumlar.
+              </p>
+            </div>
+
+            <span className="text-xs text-white/45">{feedbacks.length} kayıt</span>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead className="text-xs uppercase tracking-[0.16em] text-white/45">
+                <tr>
+                  <th className="py-3">Puan</th>
+                  <th className="py-3">Geri dönüş</th>
+                  <th className="py-3">Yorum</th>
+                  <th className="py-3">Kullanıcı</th>
+                  <th className="py-3">Sorgu ID</th>
+                  <th className="py-3">Tarih</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-white/10 text-white/78">
+                {feedbacks.map((item) => (
+                  <tr key={item.id}>
+                    <td className="py-3 pr-4 font-black text-lime-200">
+                      {item.rating ? `${item.rating}/5` : "—"}
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-black ${
+                          item.helpfulness === "yardimci_oldu"
+                            ? "bg-lime-300/15 text-lime-100"
+                            : item.helpfulness === "kismen"
+                            ? "bg-yellow-400/15 text-yellow-100"
+                            : item.helpfulness === "yetersiz"
+                            ? "bg-red-400/15 text-red-100"
+                            : "bg-white/10 text-white/70"
+                        }`}
+                      >
+                        {item.helpfulness === "yardimci_oldu"
+                          ? "Yardımcı oldu"
+                          : item.helpfulness === "kismen"
+                          ? "Kısmen"
+                          : item.helpfulness === "yetersiz"
+                          ? "Yeterli değildi"
+                          : "—"}
+                      </span>
+                    </td>
+
+                    <td className="max-w-[320px] py-3 pr-4">
+                      <span className="line-clamp-2">
+                        {item.comment || "Yorum yazılmadı"}
+                      </span>
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      {item.user_id ? `${item.user_id.slice(0, 8)}...` : "—"}
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      {item.query_id ? `${item.query_id.slice(0, 8)}...` : "—"}
+                    </td>
+
+                    <td className="py-3 pr-4">{formatDate(item.created_at)}</td>
+                  </tr>
+                ))}
+
+                {feedbacks.length === 0 && (
+                  <tr>
+                    <td className="py-6 text-white/50" colSpan={6}>
+                      Henüz kullanıcı geri dönüşü yok.
                     </td>
                   </tr>
                 )}
