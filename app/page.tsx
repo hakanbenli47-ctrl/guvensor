@@ -6,8 +6,17 @@ type Point = { lat: number; lng: number };
 type Destination = Point & { label: string };
 type SearchResult = Destination & { subtitle: string };
 type VehicleType = "car" | "van" | "minibus";
+type RoadKind = "urban" | "twoWay" | "divided" | "motorway";
 type RadarPoint = Point & { id: number; maxSpeed: number | null; ref: string };
-type RoadInfo = { name: string; highway: string; maxSpeed: number | null };
+type RoadInfo = {
+  name: string;
+  ref: string;
+  highway: string;
+  maxSpeed: number | null;
+  roadKind: RoadKind;
+  oneway: boolean;
+  distance: number;
+};
 type LeafletLayer = {
   setLatLng?: (latlng: [number, number]) => LeafletLayer;
   setRadius?: (radius: number) => LeafletLayer;
@@ -46,11 +55,18 @@ const SPEED_OPTIONS = [
 const VEHICLES: Record<VehicleType, {
   label: string;
   short: string;
-  limits: { urban: string; twoWay: string; divided: string; motorway: string };
+  limits: Record<RoadKind, number>;
 }> = {
-  car: { label: "Otomobil", short: "Otomobil", limits: { urban: "50", twoWay: "90", divided: "110", motorway: "130–140" } },
-  van: { label: "Kamyonet", short: "Kamyonet", limits: { urban: "50", twoWay: "80", divided: "85", motorway: "95" } },
-  minibus: { label: "Minibüs", short: "Minibüs", limits: { urban: "50", twoWay: "80", divided: "90", motorway: "100" } },
+  car: { label: "Otomobil", short: "Otomobil", limits: { urban: 50, twoWay: 90, divided: 110, motorway: 130 } },
+  van: { label: "Kamyonet", short: "Kamyonet", limits: { urban: 50, twoWay: 80, divided: 85, motorway: 95 } },
+  minibus: { label: "Minibüs", short: "Minibüs", limits: { urban: 50, twoWay: 80, divided: 90, motorway: 100 } },
+};
+
+const ROAD_KIND_LABELS: Record<RoadKind, string> = {
+  urban: "Yerleşim içi",
+  twoWay: "Çift yönlü yol",
+  divided: "Bölünmüş yol",
+  motorway: "Otoyol",
 };
 
 function haversine(a: Point, b: Point) {
@@ -94,6 +110,58 @@ function parseMaxSpeed(value: unknown) {
   return parsed > 0 && parsed <= 200 ? parsed : null;
 }
 
+function isTruthyOsm(value: unknown) {
+  return ["yes", "true", "1", "-1"].includes(String(value || "").toLowerCase());
+}
+
+function inferRoadKind(tags: Record<string, unknown>): RoadKind {
+  const highway = String(tags.highway || "");
+  const ref = String(tags.ref || tags.int_ref || "").toUpperCase();
+  const maxspeedType = `${String(tags["maxspeed:type"] || "")} ${String(tags["source:maxspeed"] || "")} ${String(tags["zone:maxspeed"] || "")}`.toLowerCase();
+  const maxSpeed = parseMaxSpeed(tags.maxspeed);
+  const urbanHighways = new Set(["residential", "living_street", "service", "pedestrian"]);
+  const majorHighways = new Set(["trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"]);
+
+  if (highway === "motorway" || highway === "motorway_link" || /^O[- ]?\d+/.test(ref)) return "motorway";
+  if (maxspeedType.includes("urban") || urbanHighways.has(highway) || (maxSpeed != null && maxSpeed <= 50 && !/^D[- ]?\d+/.test(ref))) return "urban";
+  if (isTruthyOsm(tags.dual_carriageway)) return "divided";
+  if (isTruthyOsm(tags.oneway) && (majorHighways.has(highway) || /^D[- ]?\d+/.test(ref))) return "divided";
+  return "twoWay";
+}
+
+function roadIdentity(tags: Record<string, unknown>) {
+  const ref = String(tags.ref || tags.int_ref || "").trim();
+  const name = String(tags.name || tags.official_name || "").trim();
+  return { ref, name: name || ref || "Bulunduğun yol" };
+}
+
+function pointToSegmentDistance(point: Point, a: Point, b: Point) {
+  const lat0 = (point.lat * Math.PI) / 180;
+  const kx = 111320 * Math.cos(lat0);
+  const ky = 110540;
+  const ax = (a.lng - point.lng) * kx;
+  const ay = (a.lat - point.lat) * ky;
+  const bx = (b.lng - point.lng) * kx;
+  const by = (b.lat - point.lat) * ky;
+  const abx = bx - ax;
+  const aby = by - ay;
+  const denom = abx * abx + aby * aby;
+  const t = denom === 0 ? 0 : Math.max(0, Math.min(1, -(ax * abx + ay * aby) / denom));
+  const x = ax + t * abx;
+  const y = ay + t * aby;
+  return Math.sqrt(x * x + y * y);
+}
+
+function distanceToGeometry(point: Point, geometry: Array<{ lat: number; lon: number }>) {
+  if (!geometry.length) return Number.POSITIVE_INFINITY;
+  if (geometry.length === 1) return haversine(point, { lat: geometry[0].lat, lng: geometry[0].lon });
+  let best = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < geometry.length - 1; index += 1) {
+    best = Math.min(best, pointToSegmentDistance(point, { lat: geometry[index].lat, lng: geometry[index].lon }, { lat: geometry[index + 1].lat, lng: geometry[index + 1].lon }));
+  }
+  return best;
+}
+
 function closestRouteIndex(point: Point, route: [number, number][]) {
   if (!route.length) return -1;
   const step = Math.max(1, Math.floor(route.length / 700));
@@ -102,11 +170,6 @@ function closestRouteIndex(point: Point, route: [number, number][]) {
   for (let index = 0; index < route.length; index += step) {
     const distance = haversine(point, { lat: route[index][0], lng: route[index][1] });
     if (distance < bestDistance) { bestDistance = distance; bestIndex = index; }
-  }
-  if ((route.length - 1) % step !== 0) {
-    const lastIndex = route.length - 1;
-    const distance = haversine(point, { lat: route[lastIndex][0], lng: route[lastIndex][1] });
-    if (distance < bestDistance) bestIndex = lastIndex;
   }
   return bestIndex;
 }
@@ -139,7 +202,9 @@ export default function Home() {
   const lastTravelPointRef = useRef<Point | null>(null);
   const speedRef = useRef(0);
   const lastRadarFetchRef = useRef<(Point & { time: number }) | null>(null);
+  const lastRoadFetchRef = useRef<(Point & { time: number }) | null>(null);
   const radarFetchBusyRef = useRef(false);
+  const roadFetchBusyRef = useRef(false);
 
   const [mapReady, setMapReady] = useState(false);
   const [tracking, setTracking] = useState(false);
@@ -162,6 +227,7 @@ export default function Home() {
   const [radarPoints, setRadarPoints] = useState<RadarPoint[]>([]);
   const [radarStatus, setRadarStatus] = useState("GPS açılınca rota çevresindeki sabit radarlar taranır");
   const [roadInfo, setRoadInfo] = useState<RoadInfo | null>(null);
+  const [roadStatus, setRoadStatus] = useState("GPS açılınca bulunduğun karayolu belirlenir");
 
   useEffect(() => { destinationRef.current = destination; }, [destination]);
 
@@ -178,7 +244,7 @@ export default function Home() {
   }, [radarPoints, routeCoords]);
 
   const upcomingRadars = useMemo(() => {
-    if (!currentPoint) return [] as Array<RadarPoint & { distance: number; routeIndex: number }>;
+    if (!currentPoint) return [] as Array<RadarPoint & { distance: number; routeIndex: number; routeDistance: number }>;
     const currentRouteIndex = closestRouteIndex(currentPoint, routeCoords);
     return radarPoints
       .map((radar) => ({ ...radar, distance: haversine(currentPoint, radar), routeIndex: closestRouteIndex(radar, routeCoords), routeDistance: distanceToRoute(radar, routeCoords) }))
@@ -193,51 +259,95 @@ export default function Home() {
 
   const nextRadar = upcomingRadars[0] || null;
   const selectedVehicle = VEHICLES[vehicleType];
+  const vehicleRoadLimit = roadInfo ? selectedVehicle.limits[roadInfo.roadKind] : null;
+  const effectiveLimit = useMemo(() => {
+    if (!roadInfo || vehicleRoadLimit == null) return null;
+    if (roadInfo.maxSpeed == null) return vehicleRoadLimit;
+    return Math.min(vehicleRoadLimit, roadInfo.maxSpeed);
+  }, [roadInfo, vehicleRoadLimit]);
 
-  async function fetchRoadAndRadars(point: Point) {
+  async function overpass(query: string) {
+    const endpoints = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, { cache: "no-store" });
+        if (response.ok) return await response.json();
+      } catch {}
+    }
+    throw new Error("Harita veri servisine ulaşılamadı");
+  }
+
+  async function fetchCurrentRoad(point: Point) {
+    if (roadFetchBusyRef.current) return;
+    roadFetchBusyRef.current = true;
+    lastRoadFetchRef.current = { ...point, time: Date.now() };
+    setRoadStatus("Karayolu bilgisi güncelleniyor…");
+    const query = `[out:json][timeout:10];way["highway"](around:75,${point.lat},${point.lng});out tags geom;`;
+    try {
+      const data = await overpass(query) as { elements?: Array<Record<string, unknown>> };
+      const candidates: Array<{ tags: Record<string, unknown>; geometry: Array<{ lat: number; lon: number }>; distance: number }> = [];
+      for (const element of data.elements || []) {
+        if (element.type !== "way" || !Array.isArray(element.geometry)) continue;
+        const tags = (element.tags || {}) as Record<string, unknown>;
+        const geometry = element.geometry as Array<{ lat: number; lon: number }>;
+        const distance = distanceToGeometry(point, geometry);
+        candidates.push({ tags, geometry, distance });
+      }
+      candidates.sort((a, b) => {
+        const aRef = roadIdentity(a.tags).ref ? 1 : 0;
+        const bRef = roadIdentity(b.tags).ref ? 1 : 0;
+        const aServicePenalty = String(a.tags.highway) === "service" ? 22 : 0;
+        const bServicePenalty = String(b.tags.highway) === "service" ? 22 : 0;
+        return (a.distance + aServicePenalty - aRef * 4) - (b.distance + bServicePenalty - bRef * 4);
+      });
+      const nearest = candidates[0];
+      if (!nearest || nearest.distance > 65) {
+        setRoadInfo(null);
+        setRoadStatus("Bulunduğun yol kesin olarak eşleştirilemedi");
+        return;
+      }
+      const identity = roadIdentity(nearest.tags);
+      const roadKind = inferRoadKind(nearest.tags);
+      setRoadInfo({
+        name: identity.name,
+        ref: identity.ref,
+        highway: String(nearest.tags.highway || ""),
+        maxSpeed: parseMaxSpeed(nearest.tags.maxspeed),
+        roadKind,
+        oneway: isTruthyOsm(nearest.tags.oneway),
+        distance: nearest.distance,
+      });
+      setRoadStatus(`${identity.ref || identity.name} · ${ROAD_KIND_LABELS[roadKind]}`);
+    } catch (error) {
+      setRoadStatus(error instanceof Error ? error.message : "Karayolu bilgisi alınamadı");
+    } finally {
+      roadFetchBusyRef.current = false;
+    }
+  }
+
+  async function fetchRadars(point: Point) {
     if (radarFetchBusyRef.current) return;
     radarFetchBusyRef.current = true;
     lastRadarFetchRef.current = { ...point, time: Date.now() };
     setRadarStatus("Sabit radar verisi güncelleniyor…");
-    const query = `[out:json][timeout:14];(node["highway"="speed_camera"](around:20000,${point.lat},${point.lng});way["highway"](around:90,${point.lat},${point.lng}););out tags geom;`;
-    const endpoints = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+    const query = `[out:json][timeout:14];node["highway"="speed_camera"](around:20000,${point.lat},${point.lng});out tags;`;
     try {
-      let data: { elements?: Array<Record<string, unknown>> } | null = null;
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, { cache: "no-store" });
-          if (!response.ok) continue;
-          data = await response.json();
-          break;
-        } catch {}
-      }
-      if (!data) throw new Error("Radar veri servisine ulaşılamadı");
-      const elements = data.elements || [];
+      const data = await overpass(query) as { elements?: Array<Record<string, unknown>> };
       const radars: RadarPoint[] = [];
-      const roads: Array<{ tags: Record<string, unknown>; geometry: Array<{ lat: number; lon: number }> }> = [];
-      for (const element of elements) {
+      for (const element of data.elements || []) {
         const tags = (element.tags || {}) as Record<string, unknown>;
-        if (element.type === "node" && tags.highway === "speed_camera") {
-          const lat = Number(element.lat);
-          const lng = Number(element.lon);
-          if (Number.isFinite(lat) && Number.isFinite(lng)) radars.push({ id: Number(element.id), lat, lng, maxSpeed: parseMaxSpeed(tags.maxspeed), ref: String(tags.ref || "") });
-        }
-        if (element.type === "way" && Array.isArray(element.geometry)) roads.push({ tags, geometry: element.geometry as Array<{ lat: number; lon: number }> });
+        if (element.type !== "node" || tags.highway !== "speed_camera") continue;
+        const lat = Number(element.lat);
+        const lng = Number(element.lon);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) radars.push({ id: Number(element.id), lat, lng, maxSpeed: parseMaxSpeed(tags.maxspeed), ref: String(tags.ref || "") });
       }
       setRadarPoints(radars);
       setRadarStatus(radars.length ? `${radars.length} sabit radar kaydı yakında bulundu` : "Yakında kayıtlı sabit radar bulunamadı");
-      let nearestRoad: { tags: Record<string, unknown>; distance: number } | null = null;
-      for (const road of roads) {
-        let distance = Number.POSITIVE_INFINITY;
-        for (const vertex of road.geometry) distance = Math.min(distance, haversine(point, { lat: vertex.lat, lng: vertex.lon }));
-        if (!nearestRoad || distance < nearestRoad.distance) nearestRoad = { tags: road.tags, distance };
-      }
-      if (nearestRoad && nearestRoad.distance <= 90) {
-        setRoadInfo({ name: String(nearestRoad.tags.name || nearestRoad.tags.ref || "Bulunduğun yol"), highway: String(nearestRoad.tags.highway || ""), maxSpeed: parseMaxSpeed(nearestRoad.tags.maxspeed) });
-      } else setRoadInfo(null);
     } catch (error) {
       setRadarStatus(error instanceof Error ? error.message : "Radar verisi alınamadı");
-    } finally { radarFetchBusyRef.current = false; }
+    } finally {
+      radarFetchBusyRef.current = false;
+    }
   }
 
   async function calculateRoute(from: Point, to: Destination) {
@@ -265,7 +375,8 @@ export default function Home() {
         routeLayerRef.current = L.polyline(coords, { color: "#38bdf8", weight: 6, opacity: 0.9, lineCap: "round", lineJoin: "round" }).addTo?.(mapRef.current) || null;
         mapRef.current.fitBounds(L.latLngBounds(coords), { padding: [44, 44], maxZoom: 16 });
       }
-      void fetchRoadAndRadars(from);
+      void fetchCurrentRoad(from);
+      void fetchRadars(from);
     } catch (error) {
       const direct = haversine(from, to);
       routeBaseMetersRef.current = direct;
@@ -274,7 +385,9 @@ export default function Home() {
       setRouteCoords([]);
       setRemainingMeters(direct);
       setRouteNote(error instanceof Error ? `${error.message}. Kuş uçuşu mesafe gösteriliyor.` : "Rota alınamadı");
-    } finally { setRouteBusy(false); }
+    } finally {
+      setRouteBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -285,7 +398,10 @@ export default function Home() {
       const L = window.L;
       const map = L.map(mapNodeRef.current, { zoomControl: true }).setView([39.0, 35.0], 6);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap katkıda bulunanlar" }).addTo?.(map);
-      map.on("click", (event) => { setDestination({ lat: event.latlng.lat, lng: event.latlng.lng, label: "Haritada seçilen hedef" }); setSearchResults([]); });
+      map.on("click", (event) => {
+        setDestination({ lat: event.latlng.lat, lng: event.latlng.lng, label: "Haritada seçilen hedef" });
+        setSearchResults([]);
+      });
       mapRef.current = map;
       setMapReady(true);
     };
@@ -329,7 +445,10 @@ export default function Home() {
   }, [mapReady, visibleRadarPoints]);
 
   function stopTracking() {
-    if (watchIdRef.current != null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
+    if (watchIdRef.current != null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
     setTracking(false);
     setStatus("Takip durduruldu");
   }
@@ -349,6 +468,7 @@ export default function Home() {
         setHeading(position.coords.heading != null && Number.isFinite(position.coords.heading) ? position.coords.heading : null);
         setTracking(true);
         setStatus("Canlı GPS takibi açık");
+
         const L = window.L;
         if (L && mapRef.current) {
           if (!userMarkerRef.current) {
@@ -358,6 +478,7 @@ export default function Home() {
           if (!accuracyCircleRef.current) accuracyCircleRef.current = L.circle([point.lat, point.lng], { radius: position.coords.accuracy, color: "#38bdf8", weight: 1, opacity: 0.35, fillColor: "#38bdf8", fillOpacity: 0.08 }).addTo?.(mapRef.current) || null;
           else { accuracyCircleRef.current.setLatLng?.([point.lat, point.lng]); accuracyCircleRef.current.setRadius?.(position.coords.accuracy); }
         }
+
         const previousFix = previousFixRef.current;
         let rawSpeed = position.coords.speed != null && position.coords.speed >= 0 ? position.coords.speed * 3.6 : null;
         if (rawSpeed == null && previousFix) {
@@ -373,6 +494,7 @@ export default function Home() {
             setSpeed(smoothed);
           }
         }
+
         const lastTravel = lastTravelPointRef.current;
         if (lastTravel && routeBaseMetersRef.current != null) {
           const step = haversine(lastTravel, point);
@@ -380,6 +502,7 @@ export default function Home() {
           setRemainingMeters(Math.max(0, routeBaseMetersRef.current - travelledSinceRouteRef.current));
         }
         lastTravelPointRef.current = point;
+
         const target = destinationRef.current;
         if (target) {
           const lastRoute = lastRouteRequestRef.current;
@@ -387,10 +510,16 @@ export default function Home() {
           const enoughMovement = !lastRoute || haversine(lastRoute, point) > 75;
           if (enoughTime && enoughMovement) void calculateRoute(point, target);
         }
+
+        const lastRoad = lastRoadFetchRef.current;
+        const roadOld = !lastRoad || Date.now() - lastRoad.time > 12000;
+        const movedForRoad = !lastRoad || haversine(lastRoad, point) > 180;
+        if (roadOld || movedForRoad) void fetchCurrentRoad(point);
+
         const lastRadar = lastRadarFetchRef.current;
-        const radarDataOld = !lastRadar || Date.now() - lastRadar.time > 120000;
+        const radarOld = !lastRadar || Date.now() - lastRadar.time > 120000;
         const movedForRadar = !lastRadar || haversine(lastRadar, point) > 3000;
-        if (radarDataOld || movedForRadar) void fetchRoadAndRadars(point);
+        if (radarOld || movedForRadar) void fetchRadars(point);
       },
       (error) => {
         setTracking(false);
@@ -418,8 +547,11 @@ export default function Home() {
       });
       setSearchResults(results);
       if (!results.length) setSearchError("Sonuç bulunamadı. Haritadan hedef seçebilirsin.");
-    } catch (error) { setSearchError(error instanceof Error ? error.message : "Konum aranamadı"); }
-    finally { setSearchBusy(false); }
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Konum aranamadı");
+    } finally {
+      setSearchBusy(false);
+    }
   }
 
   function chooseSearchResult(result: SearchResult) {
@@ -453,9 +585,9 @@ export default function Home() {
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <div className="eyebrow"><span className={tracking ? "live-dot active" : "live-dot"} /> CANLI YOL + RADAR TAKİBİ</div>
-          <h1>Hızını gör. Rotanı izle. Yaklaşan sabit radarı bil.</h1>
-          <p>GPS konumu, rota, araç türüne göre yasal hız referansı ve OpenStreetMap’te kayıtlı sabit hız kameraları hareket ettikçe güncellenir.</p>
+          <div className="eyebrow"><span className={tracking ? "live-dot active" : "live-dot"} /> CANLI YOL + HIZ + RADAR</div>
+          <h1>Hangi karayolundaysan, hız sınırını ona göre gör.</h1>
+          <p>GPS konumundan D300, D750, O-21 gibi bulunduğun yol okunur; seçtiğin araç türüne göre genel yasal üst sınır ve varsa yolun kayıtlı hız limiti birlikte değerlendirilir.</p>
         </div>
         <div className="top-actions">{tracking ? <button className="button secondary" onClick={stopTracking}>Takibi durdur</button> : <button className="button primary" onClick={startTracking}>Konumumu kullan</button>}</div>
       </section>
@@ -473,22 +605,35 @@ export default function Home() {
             <div className="vehicle-tabs" role="group" aria-label="Araç türü seç">
               {(Object.keys(VEHICLES) as VehicleType[]).map((key) => <button key={key} className={vehicleType === key ? "active" : ""} onClick={() => setVehicleType(key)}>{VEHICLES[key].short}</button>)}
             </div>
-            <div className="limit-grid"><div><span>Şehir içi</span><b>{selectedVehicle.limits.urban}</b></div><div><span>Çift yön</span><b>{selectedVehicle.limits.twoWay}</b></div><div><span>Bölünmüş</span><b>{selectedVehicle.limits.divided}</b></div><div><span>Otoyol</span><b>{selectedVehicle.limits.motorway}</b></div></div>
-            <p className="hint">KGM genel yasal hız tablosu. Yol üzerindeki trafik işareti ve özel düzenlemeler önceliklidir.</p>
+            <p className="hint">Araç türünü bir kez seç; yol değiştikçe hız sınırı otomatik güncellenir.</p>
           </div>
 
-          <div className={`radar-card ${nextRadar && nextRadar.distance <= 2000 ? "warning" : ""}`}>
-            <div className="status-row"><span className="card-kicker">YAKLAŞAN SABİT RADAR</span><span className="radar-count">{upcomingRadars.length}</span></div>
-            {nextRadar ? <><div className="radar-distance">{formatDistance(nextRadar.distance)}</div><div className="radar-meta"><span>{nextRadar.maxSpeed ? `Kayıtlı limit ${nextRadar.maxSpeed} km/sa` : "Radar limiti kayıtta yok"}</span><span>{selectedVehicle.label} seçili</span></div></> : <strong className="radar-empty">Rota üzerinde yaklaşan kayıtlı sabit radar yok.</strong>}
-            <p className="hint">{radarStatus}</p>
+          <div className="speed-card">
+            <span className="card-kicker">BULUNDUĞUN KARAYOLU</span>
+            <div className="speed-value"><strong style={{ fontSize: roadInfo?.ref ? 48 : 34 }}>{roadInfo?.ref || roadInfo?.name || "—"}</strong></div>
+            <div className="current-road"><span>{roadInfo ? `${roadInfo.name}${roadInfo.ref && roadInfo.name !== roadInfo.ref ? ` · ${roadInfo.ref}` : ""}` : roadStatus}</span><b>{roadInfo ? ROAD_KIND_LABELS[roadInfo.roadKind] : "—"}</b></div>
+            <span className="microcopy">Yol bilgisi GPS hareketine göre yaklaşık 10–15 saniyede bir yeniden okunur.</span>
+          </div>
+
+          <div className="speed-card">
+            <span className="card-kicker">BU YOLDA HIZ SINIRI · {selectedVehicle.label.toUpperCase()}</span>
+            <div className="speed-value"><strong>{effectiveLimit ?? "—"}</strong><span>km/sa</span></div>
+            <div className="speed-bar"><i style={{ width: `${Math.min(100, ((effectiveLimit || 0) / 140) * 100)}%` }} /></div>
+            <div className="current-road"><span>{roadInfo ? ROAD_KIND_LABELS[roadInfo.roadKind] : "Yol türü bekleniyor"}</span><b>{roadInfo?.maxSpeed ? `Yol kaydı ${roadInfo.maxSpeed}` : vehicleRoadLimit ? `Araç üst sınırı ${vehicleRoadLimit}` : "—"}</b></div>
+            <span className="microcopy">Varsa kayıtlı yol limiti ile araç sınıfının genel üst sınırından daha düşük olan esas alınır. Trafik levhası her zaman önceliklidir.</span>
           </div>
 
           <div className="speed-card">
             <span className="card-kicker">ANLIK HIZ</span>
             <div className="speed-value"><strong>{Math.round(speed)}</strong><span>km/sa</span></div>
             <div className="speed-bar"><i style={{ width: `${Math.min(100, (speed / 140) * 100)}%` }} /></div>
-            <div className="current-road"><span>{roadInfo?.name || "Yol bilgisi bekleniyor"}</span><b>{roadInfo?.maxSpeed ? `${roadInfo.maxSpeed} km/sa` : "—"}</b></div>
-            <span className="microcopy">Yol limiti yalnızca OpenStreetMap kaydında varsa gösterilir.</span>
+            <span className="microcopy">GPS ölçümüne göre otomatik hesaplanır.</span>
+          </div>
+
+          <div className={`radar-card ${nextRadar && nextRadar.distance <= 2000 ? "warning" : ""}`}>
+            <div className="status-row"><span className="card-kicker">YAKLAŞAN SABİT RADAR</span><span className="radar-count">{upcomingRadars.length}</span></div>
+            {nextRadar ? <><div className="radar-distance">{formatDistance(nextRadar.distance)}</div><div className="radar-meta"><span>{nextRadar.maxSpeed ? `Kayıtlı limit ${nextRadar.maxSpeed} km/sa` : "Radar limiti kayıtta yok"}</span><span>{selectedVehicle.label} seçili</span></div></> : <strong className="radar-empty">Rota üzerinde yaklaşan kayıtlı sabit radar yok.</strong>}
+            <p className="hint">{radarStatus}</p>
           </div>
 
           <div className="field-group">
@@ -499,8 +644,8 @@ export default function Home() {
 
           <div className="field-group destination-search">
             <label htmlFor="destination-search">Hedef ara</label>
-            <form onSubmit={handleSearch} className="search-row"><input id="destination-search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Örn. Antalya Otogar" autoComplete="off" /><button type="submit" disabled={searchBusy}>{searchBusy ? "…" : "Ara"}</button></form>
-            <p className="hint">İstersen haritada herhangi bir noktaya dokunarak da hedef seçebilirsin.</p>
+            <form onSubmit={handleSearch} className="search-row"><input id="destination-search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Örn. Kahramanmaraş" autoComplete="off" /><button type="submit" disabled={searchBusy}>{searchBusy ? "…" : "Ara"}</button></form>
+            <p className="hint">Hedef yalnızca rota ve varış süresi içindir; yol/hız bilgisi gerçek GPS konumundan okunur.</p>
             {searchError && <p className="error-text">{searchError}</p>}
             {!!searchResults.length && <div className="search-results">{searchResults.map((result, index) => <button key={`${result.lat}-${result.lng}-${index}`} onClick={() => chooseSearchResult(result)}><strong>{result.label}</strong><span>{result.subtitle || "Konum"}</span></button>)}</div>}
           </div>
@@ -511,21 +656,21 @@ export default function Home() {
         <div className="map-column">
           <div className="map-wrap">
             <div ref={mapNodeRef} id="live-map" aria-label="Canlı konum, hedef ve sabit radar haritası" />
-            <div className="map-hint">Haritaya dokun: hedef seç</div>
+            <div className="map-hint">{roadInfo?.ref ? `${roadInfo.ref} · ${effectiveLimit ?? "—"} km/sa` : "Haritaya dokun: hedef seç"}</div>
             {nextRadar && nextRadar.distance <= 5000 && <div className={nextRadar.distance <= 2000 ? "radar-overlay urgent" : "radar-overlay"}><span>RADAR</span><strong>{formatDistance(nextRadar.distance)}</strong><small>{nextRadar.maxSpeed ? `${nextRadar.maxSpeed} km/sa kayıtlı limit` : "Sabit radar kaydı"}</small></div>}
             <button className="locate-button" onClick={centerOnMe} disabled={!currentPoint} aria-label="Konumuma dön">⌖</button>
           </div>
 
           <div className="metric-grid">
-            <div className="metric-card accent"><span>KALAN YOL</span><strong>{formatDistance(remainingMeters)}</strong><small>{routeBusy ? "Rota hesaplanıyor…" : routeNote}</small></div>
+            <div className="metric-card accent"><span>YOL / HIZ SINIRI</span><strong>{roadInfo?.ref || roadInfo?.name || "—"} · {effectiveLimit ?? "—"}</strong><small>{roadInfo ? `${ROAD_KIND_LABELS[roadInfo.roadKind]} · ${selectedVehicle.label}` : roadStatus}</small></div>
+            <div className="metric-card"><span>KALAN YOL</span><strong>{formatDistance(remainingMeters)}</strong><small>{routeBusy ? "Rota hesaplanıyor…" : routeNote}</small></div>
             <div className="metric-card"><span>TAHMİNİ VARIŞ</span><strong>{formatEta(etaSeconds)}</strong><small>{etaMode === "live" ? `Anlık ${Math.round(speed)} km/sa ile` : `${etaMode} km/sa sabit hız ile`}</small></div>
             <div className="metric-card"><span>RADAR</span><strong>{nextRadar ? formatDistance(nextRadar.distance) : "—"}</strong><small>{nextRadar ? `${upcomingRadars.length} yaklaşan sabit radar kaydı` : radarStatus}</small></div>
-            <div className="metric-card"><span>KONUM</span><strong className="coords">{currentPoint ? `${currentPoint.lat.toFixed(5)}, ${currentPoint.lng.toFixed(5)}` : "—"}</strong><small>{tracking ? "GPS canlı" : "Konum takibi kapalı"}</small></div>
           </div>
         </div>
       </section>
 
-      <footer><span>Sabit radar verisi topluluk haritasına bağlıdır; mobil/aktif polis radarını telefon doğrudan algılayamaz. Sürüş sırasında ekranla ilgilenme.</span><span>Harita: OpenStreetMap · Rota: OSRM · Radar: OSM/Overpass</span></footer>
+      <footer><span>Hız bilgisi harita verisi + seçilen araç sınıfına göre hesaplanan yardımcı referanstır; sahadaki trafik levhası ve resmi düzenleme önceliklidir.</span><span>Harita: OpenStreetMap · Rota: OSRM · Radar/Yol: OSM/Overpass</span></footer>
     </main>
   );
 }
