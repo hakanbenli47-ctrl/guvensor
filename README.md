@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# YKS Akademi 2027
 
-## Getting Started
+Akdeniz Üniversitesi Psikoloji (EA) hedefi için sıfırdan oluşturulan Next.js 16 + React 19 tabanlı kişisel öğrenme uygulaması.
 
-First, run the development server:
+## Kurulum
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Varsayılan adres: http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## İçerik ve program
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- 14 ders, 196 konu: TYT (Matematik, Geometri, Türkçe, Tarih, Coğrafya, Felsefe, Din, Fizik, Kimya, Biyoloji) ve AYT (Matematik, Edebiyat, Tarih-1, Coğrafya-1).
+- Her konu için kısa açıklama, temel kurallar, çözümlü örnek, 12 soruluk konu testi.
+- Matematikte sayı varyasyonları üreten algoritmik özgün testler; diğer derslerde bilgi ve tanım ölçen otomatik seçenekli sorular.
+- TYT 120 soru, AYT EA 80 soru ve haftalık mini 30 soruluk test modu.
+- 19 Ekim 2026 – 20 Haziran 2027 için 35 haftalık, haftada 6 gün × günde 4 adet 45 dakikalık çalışma oturumu.
+- Çarşamba/hafta sonu eksik tekrarları; yanıt, süre, doğruluk, konu yeterliği ve net kayıtları.
+- Tarayıcıdaki localStorage ile kalıcı ilerleme; JSON dışa aktarma / içe aktarma.
+- Mobil uyumlu panel ve PDF olarak yazdırılabilir konu anlatımı.
 
-## Learn More
+## İçerik güvenilirliği ve sınırlar
 
-To learn more about Next.js, take a look at the following resources:
+Bu, uygulama içine tek seferde konulmuş **başlangıç düzeyinde kapsamlı konu kataloğu ve çalışan test sistemi**dir. Her konu için en ince ayrıntıyı kapsayan editöryal kitap içeriği, yüzlerce ayrı el yazımı soru veya resmî soru bankası bulunduğu anlamına **gelmez**. Konu açıklamaları özet niteliğindedir; öğretici kaynakla desteklenmelidir. Testler gerçek çıkmış ÖSYM soruları değildir. Sayısal sorularda şablonlara dayalı özgün varyasyonlar üretilir; sözel sorularda örnek soru ve kavramsal tanım eşleştirme kullanılır. Karmaşık geometri şekilleri ve görsel soru desteği bulunmaz. Her bir soru ve cevabın pedagojik editör denetimi yapılmadan resmî sınav eşdeğerliği iddiası taşınmaz.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Uygulama Supabase veya ücretli sunucu hizmetine ihtiyaç duymaz. Veriler sadece kullanılan tarayıcıda kaydedilir; kullanıcı hesabı ve cihazlar arası senkronizasyon **yoktur**. Verileri korumak için Ayarlar menüsünden JSON yedeği alın.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+2027 sınav tarihi ve müfredat resmî olarak kesinleştiğinde 35 haftalık plan son tarihe göre gözden geçirilmelidir.
 
-## Deploy on Vercel
+## ÖSYM kaynakları
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- https://www.osym.gov.tr/
+- https://www.osym.gov.tr/Sayfa/SinavTakvimi/tr-TR
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Teknik
+
+- `lib/curriculum.ts`: konu kataloğu
+- `lib/study.ts`: soru oluşturma, günlük plan, eksik analizi, deneme motoru
+- `app/page.tsx`: ders, test, deneme, analiz, yedekleme ekranları
+- `app/globals.css`: responsive tema
+
+Herhangi bir telifli soru PDF'i depoya eklenmedi.

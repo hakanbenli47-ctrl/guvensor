@@ -1,676 +1,137 @@
 "use client";
-
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-
-type Point = { lat: number; lng: number };
-type Destination = Point & { label: string };
-type SearchResult = Destination & { subtitle: string };
-type VehicleType = "car" | "van" | "minibus";
-type RoadKind = "urban" | "twoWay" | "divided" | "motorway";
-type RadarPoint = Point & { id: number; maxSpeed: number | null; ref: string };
-type RoadInfo = {
-  name: string;
-  ref: string;
-  highway: string;
-  maxSpeed: number | null;
-  roadKind: RoadKind;
-  oneway: boolean;
-  distance: number;
+import {useEffect,useMemo,useState} from "react";
+import {COURSES,TOPICS,getTopic,getCourse,topicsByCourse,type CourseId,type Topic} from "../lib/curriculum";
+import {EMPTY,END_DATE,START_DATE,completionPercent,currentWeek,dailyPlan,dateKey,dueTopics,formatDuration,makeExam,makeQuiz,monthPlan,selectedDate,topicStats,weakTopics,type Question,type StudyBlock,type StudyState,type AnswerRecord} from "../lib/study";
+type Page="home"|"subjects"|"calendar"|"exams"|"analytics"|"settings";
+type Mode="ders"|"tekrar"|"deneme";
+type Session={questions:Question[];step:"learn"|"quiz"|"result";index:number;selected:Record<number,number>;mode:Mode;topicId?:string;blockId?:string;examType?:"Mini"|"TYT"|"AYT";startedAt:number;questionStartedAt:number;};
+const STORAGE="yks-koc-2027-progress-v1", SESSION="yks-koc-2027-session-v1";
+const prettyDate=(iso:string)=>new Date(iso+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric",weekday:"long"});
+const weekDays=["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"];
+const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(value,max));
+const safeState=(x:unknown):StudyState=>{
+ if(!x||typeof x!=="object")return EMPTY;
+ const o=x as Partial<StudyState>;
+ return {answers:Array.isArray(o.answers)?o.answers:[],exams:Array.isArray(o.exams)?o.exams:[],minutes:typeof o.minutes==="object"&&o.minutes?o.minutes:{},finished:typeof o.finished==="object"&&o.finished?o.finished:{},activeTopicId:typeof o.activeTopicId==="string"?o.activeTopicId:undefined};
 };
-type LeafletLayer = {
-  setLatLng?: (latlng: [number, number]) => LeafletLayer;
-  setRadius?: (radius: number) => LeafletLayer;
-  addTo?: (map: LeafletMap) => LeafletLayer;
-  remove?: () => void;
-};
-type LeafletMap = {
-  setView: (latlng: [number, number], zoom?: number, options?: Record<string, unknown>) => LeafletMap;
-  on: (event: string, handler: (event: { latlng: Point }) => void) => LeafletMap;
-  fitBounds: (bounds: unknown, options?: Record<string, unknown>) => LeafletMap;
-  remove: () => void;
-};
-type LeafletApi = {
-  map: (node: HTMLElement, options?: Record<string, unknown>) => LeafletMap;
-  tileLayer: (url: string, options?: Record<string, unknown>) => LeafletLayer;
-  divIcon: (options: Record<string, unknown>) => unknown;
-  marker: (latlng: [number, number], options?: Record<string, unknown>) => LeafletLayer;
-  circle: (latlng: [number, number], options?: Record<string, unknown>) => LeafletLayer;
-  polyline: (latlngs: [number, number][], options?: Record<string, unknown>) => LeafletLayer;
-  latLngBounds: (latlngs: [number, number][]) => unknown;
-};
-
-declare global {
-  interface Window { L?: LeafletApi; }
-}
-
-const SPEED_OPTIONS = [
-  { value: "live", label: "Anlık hız" },
-  { value: "30", label: "30 km/sa" },
-  { value: "50", label: "50 km/sa" },
-  { value: "70", label: "70 km/sa" },
-  { value: "90", label: "90 km/sa" },
-  { value: "110", label: "110 km/sa" },
-];
-
-const VEHICLES: Record<VehicleType, {
-  label: string;
-  short: string;
-  limits: Record<RoadKind, number>;
-}> = {
-  car: { label: "Otomobil", short: "Otomobil", limits: { urban: 50, twoWay: 90, divided: 110, motorway: 130 } },
-  van: { label: "Kamyonet", short: "Kamyonet", limits: { urban: 50, twoWay: 80, divided: 85, motorway: 95 } },
-  minibus: { label: "Minibüs", short: "Minibüs", limits: { urban: 50, twoWay: 80, divided: 90, motorway: 100 } },
-};
-
-const ROAD_KIND_LABELS: Record<RoadKind, string> = {
-  urban: "Yerleşim içi",
-  twoWay: "Çift yönlü yol",
-  divided: "Bölünmüş yol",
-  motorway: "Otoyol",
-};
-
-function haversine(a: Point, b: Point) {
-  const r = 6371000;
-  const toRad = (value: number) => (value * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * r * Math.asin(Math.sqrt(h));
-}
-
-function formatDistance(meters: number | null) {
-  if (meters == null || !Number.isFinite(meters)) return "—";
-  if (meters < 1000) return `${Math.max(0, Math.round(meters))} m`;
-  return `${(meters / 1000).toFixed(meters < 10000 ? 1 : 0)} km`;
-}
-
-function formatEta(seconds: number | null) {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return "—";
-  if (seconds < 60) return "< 1 dk";
-  const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) return `${minutes} dk`;
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return mins ? `${hours} sa ${mins} dk` : `${hours} sa`;
-}
-
-function getSearchLabel(properties: Record<string, unknown>) {
-  const name = String(properties.name || properties.street || properties.city || "Seçilen konum");
-  const pieces = [properties.district, properties.city, properties.state, properties.country].filter(Boolean).map(String);
-  return { name, subtitle: [...new Set(pieces)].join(" · ") };
-}
-
-function parseMaxSpeed(value: unknown) {
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  const match = String(value).match(/\d{2,3}/);
-  if (!match) return null;
-  const parsed = Number(match[0]);
-  return parsed > 0 && parsed <= 200 ? parsed : null;
-}
-
-function isTruthyOsm(value: unknown) {
-  return ["yes", "true", "1", "-1"].includes(String(value || "").toLowerCase());
-}
-
-function inferRoadKind(tags: Record<string, unknown>): RoadKind {
-  const highway = String(tags.highway || "");
-  const ref = String(tags.ref || tags.int_ref || "").toUpperCase();
-  const maxspeedType = `${String(tags["maxspeed:type"] || "")} ${String(tags["source:maxspeed"] || "")} ${String(tags["zone:maxspeed"] || "")}`.toLowerCase();
-  const maxSpeed = parseMaxSpeed(tags.maxspeed);
-  const urbanHighways = new Set(["residential", "living_street", "service", "pedestrian"]);
-  const majorHighways = new Set(["trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"]);
-
-  if (highway === "motorway" || highway === "motorway_link" || /^O[- ]?\d+/.test(ref)) return "motorway";
-  if (maxspeedType.includes("urban") || urbanHighways.has(highway) || (maxSpeed != null && maxSpeed <= 50 && !/^D[- ]?\d+/.test(ref))) return "urban";
-  if (isTruthyOsm(tags.dual_carriageway)) return "divided";
-  if (isTruthyOsm(tags.oneway) && (majorHighways.has(highway) || /^D[- ]?\d+/.test(ref))) return "divided";
-  return "twoWay";
-}
-
-function roadIdentity(tags: Record<string, unknown>) {
-  const ref = String(tags.ref || tags.int_ref || "").trim();
-  const name = String(tags.name || tags.official_name || "").trim();
-  return { ref, name: name || ref || "Bulunduğun yol" };
-}
-
-function pointToSegmentDistance(point: Point, a: Point, b: Point) {
-  const lat0 = (point.lat * Math.PI) / 180;
-  const kx = 111320 * Math.cos(lat0);
-  const ky = 110540;
-  const ax = (a.lng - point.lng) * kx;
-  const ay = (a.lat - point.lat) * ky;
-  const bx = (b.lng - point.lng) * kx;
-  const by = (b.lat - point.lat) * ky;
-  const abx = bx - ax;
-  const aby = by - ay;
-  const denom = abx * abx + aby * aby;
-  const t = denom === 0 ? 0 : Math.max(0, Math.min(1, -(ax * abx + ay * aby) / denom));
-  const x = ax + t * abx;
-  const y = ay + t * aby;
-  return Math.sqrt(x * x + y * y);
-}
-
-function distanceToGeometry(point: Point, geometry: Array<{ lat: number; lon: number }>) {
-  if (!geometry.length) return Number.POSITIVE_INFINITY;
-  if (geometry.length === 1) return haversine(point, { lat: geometry[0].lat, lng: geometry[0].lon });
-  let best = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < geometry.length - 1; index += 1) {
-    best = Math.min(best, pointToSegmentDistance(point, { lat: geometry[index].lat, lng: geometry[index].lon }, { lat: geometry[index + 1].lat, lng: geometry[index + 1].lon }));
-  }
-  return best;
-}
-
-function closestRouteIndex(point: Point, route: [number, number][]) {
-  if (!route.length) return -1;
-  const step = Math.max(1, Math.floor(route.length / 700));
-  let bestIndex = 0;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < route.length; index += step) {
-    const distance = haversine(point, { lat: route[index][0], lng: route[index][1] });
-    if (distance < bestDistance) { bestDistance = distance; bestIndex = index; }
-  }
-  return bestIndex;
-}
-
-function distanceToRoute(point: Point, route: [number, number][]) {
-  if (!route.length) return Number.POSITIVE_INFINITY;
-  const step = Math.max(1, Math.floor(route.length / 700));
-  let best = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < route.length; index += step) {
-    best = Math.min(best, haversine(point, { lat: route[index][0], lng: route[index][1] }));
-  }
-  return best;
-}
-
-export default function Home() {
-  const mapNodeRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
-  const userMarkerRef = useRef<LeafletLayer | null>(null);
-  const accuracyCircleRef = useRef<LeafletLayer | null>(null);
-  const destinationMarkerRef = useRef<LeafletLayer | null>(null);
-  const routeLayerRef = useRef<LeafletLayer | null>(null);
-  const radarMarkerRefs = useRef<LeafletLayer[]>([]);
-  const watchIdRef = useRef<number | null>(null);
-  const currentPointRef = useRef<Point | null>(null);
-  const previousFixRef = useRef<(Point & { time: number }) | null>(null);
-  const destinationRef = useRef<Destination | null>(null);
-  const lastRouteRequestRef = useRef<(Point & { time: number }) | null>(null);
-  const routeBaseMetersRef = useRef<number | null>(null);
-  const travelledSinceRouteRef = useRef(0);
-  const lastTravelPointRef = useRef<Point | null>(null);
-  const speedRef = useRef(0);
-  const lastRadarFetchRef = useRef<(Point & { time: number }) | null>(null);
-  const lastRoadFetchRef = useRef<(Point & { time: number }) | null>(null);
-  const radarFetchBusyRef = useRef(false);
-  const roadFetchBusyRef = useRef(false);
-
-  const [mapReady, setMapReady] = useState(false);
-  const [tracking, setTracking] = useState(false);
-  const [status, setStatus] = useState("Konum takibi henüz başlamadı");
-  const [currentPoint, setCurrentPoint] = useState<Point | null>(null);
-  const [destination, setDestination] = useState<Destination | null>(null);
-  const [speed, setSpeed] = useState(0);
-  const [accuracy, setAccuracy] = useState<number | null>(null);
-  const [heading, setHeading] = useState<number | null>(null);
-  const [remainingMeters, setRemainingMeters] = useState<number | null>(null);
-  const [routeBusy, setRouteBusy] = useState(false);
-  const [routeNote, setRouteNote] = useState("Hedef seçildiğinde araç rotası hesaplanır");
-  const [etaMode, setEtaMode] = useState("live");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [searchError, setSearchError] = useState("");
-  const [vehicleType, setVehicleType] = useState<VehicleType>("car");
-  const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
-  const [radarPoints, setRadarPoints] = useState<RadarPoint[]>([]);
-  const [radarStatus, setRadarStatus] = useState("GPS açılınca rota çevresindeki sabit radarlar taranır");
-  const [roadInfo, setRoadInfo] = useState<RoadInfo | null>(null);
-  const [roadStatus, setRoadStatus] = useState("GPS açılınca bulunduğun karayolu belirlenir");
-
-  useEffect(() => { destinationRef.current = destination; }, [destination]);
-
-  const etaSeconds = useMemo(() => {
-    if (remainingMeters == null) return null;
-    const chosenSpeed = etaMode === "live" ? speed : Number(etaMode);
-    if (!chosenSpeed || chosenSpeed < 3) return null;
-    return remainingMeters / ((chosenSpeed * 1000) / 3600);
-  }, [remainingMeters, etaMode, speed]);
-
-  const visibleRadarPoints = useMemo(() => {
-    if (!routeCoords.length) return radarPoints;
-    return radarPoints.filter((radar) => distanceToRoute(radar, routeCoords) <= 650);
-  }, [radarPoints, routeCoords]);
-
-  const upcomingRadars = useMemo(() => {
-    if (!currentPoint) return [] as Array<RadarPoint & { distance: number; routeIndex: number; routeDistance: number }>;
-    const currentRouteIndex = closestRouteIndex(currentPoint, routeCoords);
-    return radarPoints
-      .map((radar) => ({ ...radar, distance: haversine(currentPoint, radar), routeIndex: closestRouteIndex(radar, routeCoords), routeDistance: distanceToRoute(radar, routeCoords) }))
-      .filter((radar) => {
-        if (radar.distance > 20000) return false;
-        if (!routeCoords.length) return true;
-        return radar.routeDistance <= 650 && radar.routeIndex >= Math.max(0, currentRouteIndex - 5);
-      })
-      .sort((a, b) => routeCoords.length && a.routeIndex !== b.routeIndex ? a.routeIndex - b.routeIndex : a.distance - b.distance)
-      .slice(0, 8);
-  }, [currentPoint, radarPoints, routeCoords]);
-
-  const nextRadar = upcomingRadars[0] || null;
-  const selectedVehicle = VEHICLES[vehicleType];
-  const vehicleRoadLimit = roadInfo ? selectedVehicle.limits[roadInfo.roadKind] : null;
-  const effectiveLimit = useMemo(() => {
-    if (!roadInfo || vehicleRoadLimit == null) return null;
-    if (roadInfo.maxSpeed == null) return vehicleRoadLimit;
-    return Math.min(vehicleRoadLimit, roadInfo.maxSpeed);
-  }, [roadInfo, vehicleRoadLimit]);
-
-  async function overpass(query: string) {
-    const endpoints = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
-    for (const endpoint of endpoints) {
-      try {
-        const response = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, { cache: "no-store" });
-        if (response.ok) return await response.json();
-      } catch {}
-    }
-    throw new Error("Harita veri servisine ulaşılamadı");
-  }
-
-  async function fetchCurrentRoad(point: Point) {
-    if (roadFetchBusyRef.current) return;
-    roadFetchBusyRef.current = true;
-    lastRoadFetchRef.current = { ...point, time: Date.now() };
-    setRoadStatus("Karayolu bilgisi güncelleniyor…");
-    const query = `[out:json][timeout:10];way["highway"](around:75,${point.lat},${point.lng});out tags geom;`;
-    try {
-      const data = await overpass(query) as { elements?: Array<Record<string, unknown>> };
-      const candidates: Array<{ tags: Record<string, unknown>; geometry: Array<{ lat: number; lon: number }>; distance: number }> = [];
-      for (const element of data.elements || []) {
-        if (element.type !== "way" || !Array.isArray(element.geometry)) continue;
-        const tags = (element.tags || {}) as Record<string, unknown>;
-        const geometry = element.geometry as Array<{ lat: number; lon: number }>;
-        const distance = distanceToGeometry(point, geometry);
-        candidates.push({ tags, geometry, distance });
-      }
-      candidates.sort((a, b) => {
-        const aRef = roadIdentity(a.tags).ref ? 1 : 0;
-        const bRef = roadIdentity(b.tags).ref ? 1 : 0;
-        const aServicePenalty = String(a.tags.highway) === "service" ? 22 : 0;
-        const bServicePenalty = String(b.tags.highway) === "service" ? 22 : 0;
-        return (a.distance + aServicePenalty - aRef * 4) - (b.distance + bServicePenalty - bRef * 4);
-      });
-      const nearest = candidates[0];
-      if (!nearest || nearest.distance > 65) {
-        setRoadInfo(null);
-        setRoadStatus("Bulunduğun yol kesin olarak eşleştirilemedi");
-        return;
-      }
-      const identity = roadIdentity(nearest.tags);
-      const roadKind = inferRoadKind(nearest.tags);
-      setRoadInfo({
-        name: identity.name,
-        ref: identity.ref,
-        highway: String(nearest.tags.highway || ""),
-        maxSpeed: parseMaxSpeed(nearest.tags.maxspeed),
-        roadKind,
-        oneway: isTruthyOsm(nearest.tags.oneway),
-        distance: nearest.distance,
-      });
-      setRoadStatus(`${identity.ref || identity.name} · ${ROAD_KIND_LABELS[roadKind]}`);
-    } catch (error) {
-      setRoadStatus(error instanceof Error ? error.message : "Karayolu bilgisi alınamadı");
-    } finally {
-      roadFetchBusyRef.current = false;
-    }
-  }
-
-  async function fetchRadars(point: Point) {
-    if (radarFetchBusyRef.current) return;
-    radarFetchBusyRef.current = true;
-    lastRadarFetchRef.current = { ...point, time: Date.now() };
-    setRadarStatus("Sabit radar verisi güncelleniyor…");
-    const query = `[out:json][timeout:14];node["highway"="speed_camera"](around:20000,${point.lat},${point.lng});out tags;`;
-    try {
-      const data = await overpass(query) as { elements?: Array<Record<string, unknown>> };
-      const radars: RadarPoint[] = [];
-      for (const element of data.elements || []) {
-        const tags = (element.tags || {}) as Record<string, unknown>;
-        if (element.type !== "node" || tags.highway !== "speed_camera") continue;
-        const lat = Number(element.lat);
-        const lng = Number(element.lon);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) radars.push({ id: Number(element.id), lat, lng, maxSpeed: parseMaxSpeed(tags.maxspeed), ref: String(tags.ref || "") });
-      }
-      setRadarPoints(radars);
-      setRadarStatus(radars.length ? `${radars.length} sabit radar kaydı yakında bulundu` : "Yakında kayıtlı sabit radar bulunamadı");
-    } catch (error) {
-      setRadarStatus(error instanceof Error ? error.message : "Radar verisi alınamadı");
-    } finally {
-      radarFetchBusyRef.current = false;
-    }
-  }
-
-  async function calculateRoute(from: Point, to: Destination) {
-    setRouteBusy(true);
-    setRouteNote("Rota güncelleniyor…");
-    lastRouteRequestRef.current = { ...from, time: Date.now() };
-    try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=false`;
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) throw new Error("Rota servisine ulaşılamadı");
-      const data = await response.json();
-      const route = data?.routes?.[0];
-      if (!route) throw new Error("Bu hedef için araç rotası bulunamadı");
-      const meters = Number(route.distance);
-      routeBaseMetersRef.current = meters;
-      travelledSinceRouteRef.current = 0;
-      lastTravelPointRef.current = from;
-      setRemainingMeters(meters);
-      setRouteNote("Yol mesafesi canlı konuma göre güncelleniyor");
-      const coords: [number, number][] = (route.geometry?.coordinates || []).map((coordinate: [number, number]) => [coordinate[1], coordinate[0]]);
-      setRouteCoords(coords);
-      const L = window.L;
-      if (L && mapRef.current && coords.length) {
-        routeLayerRef.current?.remove?.();
-        routeLayerRef.current = L.polyline(coords, { color: "#38bdf8", weight: 6, opacity: 0.9, lineCap: "round", lineJoin: "round" }).addTo?.(mapRef.current) || null;
-        mapRef.current.fitBounds(L.latLngBounds(coords), { padding: [44, 44], maxZoom: 16 });
-      }
-      void fetchCurrentRoad(from);
-      void fetchRadars(from);
-    } catch (error) {
-      const direct = haversine(from, to);
-      routeBaseMetersRef.current = direct;
-      travelledSinceRouteRef.current = 0;
-      lastTravelPointRef.current = from;
-      setRouteCoords([]);
-      setRemainingMeters(direct);
-      setRouteNote(error instanceof Error ? `${error.message}. Kuş uçuşu mesafe gösteriliyor.` : "Rota alınamadı");
-    } finally {
-      setRouteBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    let script: HTMLScriptElement | null = null;
-    const initMap = () => {
-      if (cancelled || mapRef.current || !mapNodeRef.current || !window.L) return;
-      const L = window.L;
-      const map = L.map(mapNodeRef.current, { zoomControl: true }).setView([39.0, 35.0], 6);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap katkıda bulunanlar" }).addTo?.(map);
-      map.on("click", (event) => {
-        setDestination({ lat: event.latlng.lat, lng: event.latlng.lng, label: "Haritada seçilen hedef" });
-        setSearchResults([]);
-      });
-      mapRef.current = map;
-      setMapReady(true);
-    };
-    if (window.L) initMap();
-    else {
-      script = document.createElement("script");
-      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      script.async = true;
-      script.onload = initMap;
-      script.onerror = () => setStatus("Harita yüklenemedi. İnternet bağlantısını kontrol et.");
-      document.head.appendChild(script);
-    }
-    return () => {
-      cancelled = true;
-      if (watchIdRef.current != null && navigator.geolocation) navigator.geolocation.clearWatch(watchIdRef.current);
-      mapRef.current?.remove();
-      mapRef.current = null;
-      if (script?.parentNode) script.parentNode.removeChild(script);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!mapReady || !destination || !window.L || !mapRef.current) return;
-    destinationMarkerRef.current?.remove?.();
-    const icon = window.L.divIcon({ className: "", html: '<div class="destination-pin"><span></span></div>', iconSize: [36, 44], iconAnchor: [18, 42] });
-    destinationMarkerRef.current = window.L.marker([destination.lat, destination.lng], { icon }).addTo?.(mapRef.current) || null;
-    const from = currentPointRef.current;
-    if (from) void calculateRoute(from, destination);
-  }, [destination, mapReady]);
-
-  useEffect(() => {
-    radarMarkerRefs.current.forEach((layer) => layer.remove?.());
-    radarMarkerRefs.current = [];
-    if (!mapReady || !window.L || !mapRef.current) return;
-    const L = window.L;
-    for (const radar of visibleRadarPoints) {
-      const icon = L.divIcon({ className: "", html: `<div class="radar-pin"><span>R</span>${radar.maxSpeed ? `<b>${radar.maxSpeed}</b>` : ""}</div>`, iconSize: [42, 48], iconAnchor: [21, 44] });
-      const marker = L.marker([radar.lat, radar.lng], { icon }).addTo?.(mapRef.current);
-      if (marker) radarMarkerRefs.current.push(marker);
-    }
-  }, [mapReady, visibleRadarPoints]);
-
-  function stopTracking() {
-    if (watchIdRef.current != null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
-    setTracking(false);
-    setStatus("Takip durduruldu");
-  }
-
-  function startTracking() {
-    if (!window.isSecureContext) { setStatus("Konum takibi için sayfanın HTTPS üzerinden açılması gerekiyor."); return; }
-    if (!("geolocation" in navigator)) { setStatus("Bu cihaz konum takibini desteklemiyor."); return; }
-    if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
-    setStatus("Konum izni bekleniyor…");
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const point = { lat: position.coords.latitude, lng: position.coords.longitude };
-        const now = position.timestamp || Date.now();
-        currentPointRef.current = point;
-        setCurrentPoint(point);
-        setAccuracy(position.coords.accuracy);
-        setHeading(position.coords.heading != null && Number.isFinite(position.coords.heading) ? position.coords.heading : null);
-        setTracking(true);
-        setStatus("Canlı GPS takibi açık");
-
-        const L = window.L;
-        if (L && mapRef.current) {
-          if (!userMarkerRef.current) {
-            const icon = L.divIcon({ className: "", html: '<div class="user-location"><span></span></div>', iconSize: [32, 32], iconAnchor: [16, 16] });
-            userMarkerRef.current = L.marker([point.lat, point.lng], { icon }).addTo?.(mapRef.current) || null;
-          } else userMarkerRef.current.setLatLng?.([point.lat, point.lng]);
-          if (!accuracyCircleRef.current) accuracyCircleRef.current = L.circle([point.lat, point.lng], { radius: position.coords.accuracy, color: "#38bdf8", weight: 1, opacity: 0.35, fillColor: "#38bdf8", fillOpacity: 0.08 }).addTo?.(mapRef.current) || null;
-          else { accuracyCircleRef.current.setLatLng?.([point.lat, point.lng]); accuracyCircleRef.current.setRadius?.(position.coords.accuracy); }
-        }
-
-        const previousFix = previousFixRef.current;
-        let rawSpeed = position.coords.speed != null && position.coords.speed >= 0 ? position.coords.speed * 3.6 : null;
-        if (rawSpeed == null && previousFix) {
-          const dt = (now - previousFix.time) / 1000;
-          if (dt > 0.5 && dt < 30) rawSpeed = (haversine(previousFix, point) / dt) * 3.6;
-        }
-        previousFixRef.current = { ...point, time: now };
-        if (rawSpeed != null && Number.isFinite(rawSpeed)) {
-          if (rawSpeed < 1.5) rawSpeed = 0;
-          if (rawSpeed < 300) {
-            const smoothed = speedRef.current === 0 ? rawSpeed : speedRef.current * 0.58 + rawSpeed * 0.42;
-            speedRef.current = smoothed;
-            setSpeed(smoothed);
-          }
-        }
-
-        const lastTravel = lastTravelPointRef.current;
-        if (lastTravel && routeBaseMetersRef.current != null) {
-          const step = haversine(lastTravel, point);
-          if (step > 1 && step < 1000) travelledSinceRouteRef.current += step;
-          setRemainingMeters(Math.max(0, routeBaseMetersRef.current - travelledSinceRouteRef.current));
-        }
-        lastTravelPointRef.current = point;
-
-        const target = destinationRef.current;
-        if (target) {
-          const lastRoute = lastRouteRequestRef.current;
-          const enoughTime = !lastRoute || Date.now() - lastRoute.time > 20000;
-          const enoughMovement = !lastRoute || haversine(lastRoute, point) > 75;
-          if (enoughTime && enoughMovement) void calculateRoute(point, target);
-        }
-
-        const lastRoad = lastRoadFetchRef.current;
-        const roadOld = !lastRoad || Date.now() - lastRoad.time > 12000;
-        const movedForRoad = !lastRoad || haversine(lastRoad, point) > 180;
-        if (roadOld || movedForRoad) void fetchCurrentRoad(point);
-
-        const lastRadar = lastRadarFetchRef.current;
-        const radarOld = !lastRadar || Date.now() - lastRadar.time > 120000;
-        const movedForRadar = !lastRadar || haversine(lastRadar, point) > 3000;
-        if (radarOld || movedForRadar) void fetchRadars(point);
-      },
-      (error) => {
-        setTracking(false);
-        if (error.code === error.PERMISSION_DENIED) setStatus("Konum izni kapalı. Tarayıcı ayarlarından konum iznini açmalısın.");
-        else if (error.code === error.POSITION_UNAVAILABLE) setStatus("GPS konumu şu anda alınamıyor.");
-        else setStatus("Konum alınırken zaman aşımı oldu. Tekrar dene.");
-      },
-      { enableHighAccuracy: true, maximumAge: 1000, timeout: 12000 },
-    );
-  }
-
-  async function handleSearch(event: FormEvent) {
-    event.preventDefault();
-    const query = searchQuery.trim();
-    if (query.length < 2) { setSearchError("En az 2 karakter yaz."); return; }
-    setSearchBusy(true);
-    setSearchError("");
-    try {
-      const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lang=tr`);
-      if (!response.ok) throw new Error("Arama servisine ulaşılamadı");
-      const data = await response.json();
-      const results: SearchResult[] = (data.features || []).map((feature: { geometry: { coordinates: [number, number] }; properties: Record<string, unknown> }) => {
-        const { name, subtitle } = getSearchLabel(feature.properties || {});
-        return { lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0], label: name, subtitle };
-      });
-      setSearchResults(results);
-      if (!results.length) setSearchError("Sonuç bulunamadı. Haritadan hedef seçebilirsin.");
-    } catch (error) {
-      setSearchError(error instanceof Error ? error.message : "Konum aranamadı");
-    } finally {
-      setSearchBusy(false);
-    }
-  }
-
-  function chooseSearchResult(result: SearchResult) {
-    setDestination({ lat: result.lat, lng: result.lng, label: result.label });
-    setSearchQuery(result.label);
-    setSearchResults([]);
-    mapRef.current?.setView([result.lat, result.lng], 15, { animate: true });
-  }
-
-  function centerOnMe() {
-    const point = currentPointRef.current;
-    if (!point || !mapRef.current) return;
-    mapRef.current.setView([point.lat, point.lng], 16, { animate: true });
-  }
-
-  function clearDestination() {
-    setDestination(null);
-    destinationRef.current = null;
-    destinationMarkerRef.current?.remove?.();
-    destinationMarkerRef.current = null;
-    routeLayerRef.current?.remove?.();
-    routeLayerRef.current = null;
-    routeBaseMetersRef.current = null;
-    travelledSinceRouteRef.current = 0;
-    setRouteCoords([]);
-    setRemainingMeters(null);
-    setRouteNote("Hedef seçildiğinde araç rotası hesaplanır");
-  }
-
-  return (
-    <main className="app-shell">
-      <section className="topbar">
-        <div>
-          <div className="eyebrow"><span className={tracking ? "live-dot active" : "live-dot"} /> CANLI YOL + HIZ + RADAR</div>
-          <h1>Hangi karayolundaysan, hız sınırını ona göre gör.</h1>
-          <p>GPS konumundan D300, D750, O-21 gibi bulunduğun yol okunur; seçtiğin araç türüne göre genel yasal üst sınır ve varsa yolun kayıtlı hız limiti birlikte değerlendirilir.</p>
-        </div>
-        <div className="top-actions">{tracking ? <button className="button secondary" onClick={stopTracking}>Takibi durdur</button> : <button className="button primary" onClick={startTracking}>Konumumu kullan</button>}</div>
-      </section>
-
-      <section className="dashboard-grid">
-        <aside className="control-panel">
-          <div className="status-card">
-            <div className="status-row"><span className="status-label">GPS durumu</span><span className={tracking ? "status-badge online" : "status-badge"}>{tracking ? "CANLI" : "BEKLİYOR"}</span></div>
-            <strong>{status}</strong>
-            <div className="mini-grid"><div><span>Doğruluk</span><b>{accuracy == null ? "—" : `±${Math.round(accuracy)} m`}</b></div><div><span>Yön</span><b>{heading == null ? "—" : `${Math.round(heading)}°`}</b></div></div>
-          </div>
-
-          <div className="vehicle-card">
-            <span className="card-kicker">ARAÇ TÜRÜ</span>
-            <div className="vehicle-tabs" role="group" aria-label="Araç türü seç">
-              {(Object.keys(VEHICLES) as VehicleType[]).map((key) => <button key={key} className={vehicleType === key ? "active" : ""} onClick={() => setVehicleType(key)}>{VEHICLES[key].short}</button>)}
-            </div>
-            <p className="hint">Araç türünü bir kez seç; yol değiştikçe hız sınırı otomatik güncellenir.</p>
-          </div>
-
-          <div className="speed-card">
-            <span className="card-kicker">BULUNDUĞUN KARAYOLU</span>
-            <div className="speed-value"><strong style={{ fontSize: roadInfo?.ref ? 48 : 34 }}>{roadInfo?.ref || roadInfo?.name || "—"}</strong></div>
-            <div className="current-road"><span>{roadInfo ? `${roadInfo.name}${roadInfo.ref && roadInfo.name !== roadInfo.ref ? ` · ${roadInfo.ref}` : ""}` : roadStatus}</span><b>{roadInfo ? ROAD_KIND_LABELS[roadInfo.roadKind] : "—"}</b></div>
-            <span className="microcopy">Yol bilgisi GPS hareketine göre yaklaşık 10–15 saniyede bir yeniden okunur.</span>
-          </div>
-
-          <div className="speed-card">
-            <span className="card-kicker">BU YOLDA HIZ SINIRI · {selectedVehicle.label.toUpperCase()}</span>
-            <div className="speed-value"><strong>{effectiveLimit ?? "—"}</strong><span>km/sa</span></div>
-            <div className="speed-bar"><i style={{ width: `${Math.min(100, ((effectiveLimit || 0) / 140) * 100)}%` }} /></div>
-            <div className="current-road"><span>{roadInfo ? ROAD_KIND_LABELS[roadInfo.roadKind] : "Yol türü bekleniyor"}</span><b>{roadInfo?.maxSpeed ? `Yol kaydı ${roadInfo.maxSpeed}` : vehicleRoadLimit ? `Araç üst sınırı ${vehicleRoadLimit}` : "—"}</b></div>
-            <span className="microcopy">Varsa kayıtlı yol limiti ile araç sınıfının genel üst sınırından daha düşük olan esas alınır. Trafik levhası her zaman önceliklidir.</span>
-          </div>
-
-          <div className="speed-card">
-            <span className="card-kicker">ANLIK HIZ</span>
-            <div className="speed-value"><strong>{Math.round(speed)}</strong><span>km/sa</span></div>
-            <div className="speed-bar"><i style={{ width: `${Math.min(100, (speed / 140) * 100)}%` }} /></div>
-            <span className="microcopy">GPS ölçümüne göre otomatik hesaplanır.</span>
-          </div>
-
-          <div className={`radar-card ${nextRadar && nextRadar.distance <= 2000 ? "warning" : ""}`}>
-            <div className="status-row"><span className="card-kicker">YAKLAŞAN SABİT RADAR</span><span className="radar-count">{upcomingRadars.length}</span></div>
-            {nextRadar ? <><div className="radar-distance">{formatDistance(nextRadar.distance)}</div><div className="radar-meta"><span>{nextRadar.maxSpeed ? `Kayıtlı limit ${nextRadar.maxSpeed} km/sa` : "Radar limiti kayıtta yok"}</span><span>{selectedVehicle.label} seçili</span></div></> : <strong className="radar-empty">Rota üzerinde yaklaşan kayıtlı sabit radar yok.</strong>}
-            <p className="hint">{radarStatus}</p>
-          </div>
-
-          <div className="field-group">
-            <label htmlFor="eta-speed">Varış süresi hangi hıza göre hesaplansın?</label>
-            <select id="eta-speed" value={etaMode} onChange={(event) => setEtaMode(event.target.value)}>{SPEED_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-            {etaMode === "live" && speed < 3 && <p className="hint">Anlık hız seçili. Hareket etmeye başlayınca süre görünür.</p>}
-          </div>
-
-          <div className="field-group destination-search">
-            <label htmlFor="destination-search">Hedef ara</label>
-            <form onSubmit={handleSearch} className="search-row"><input id="destination-search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Örn. Kahramanmaraş" autoComplete="off" /><button type="submit" disabled={searchBusy}>{searchBusy ? "…" : "Ara"}</button></form>
-            <p className="hint">Hedef yalnızca rota ve varış süresi içindir; yol/hız bilgisi gerçek GPS konumundan okunur.</p>
-            {searchError && <p className="error-text">{searchError}</p>}
-            {!!searchResults.length && <div className="search-results">{searchResults.map((result, index) => <button key={`${result.lat}-${result.lng}-${index}`} onClick={() => chooseSearchResult(result)}><strong>{result.label}</strong><span>{result.subtitle || "Konum"}</span></button>)}</div>}
-          </div>
-
-          {destination && <div className="destination-card"><div><span>HEDEF</span><strong>{destination.label}</strong></div><button onClick={clearDestination}>Temizle</button></div>}
-        </aside>
-
-        <div className="map-column">
-          <div className="map-wrap">
-            <div ref={mapNodeRef} id="live-map" aria-label="Canlı konum, hedef ve sabit radar haritası" />
-            <div className="map-hint">{roadInfo?.ref ? `${roadInfo.ref} · ${effectiveLimit ?? "—"} km/sa` : "Haritaya dokun: hedef seç"}</div>
-            {nextRadar && nextRadar.distance <= 5000 && <div className={nextRadar.distance <= 2000 ? "radar-overlay urgent" : "radar-overlay"}><span>RADAR</span><strong>{formatDistance(nextRadar.distance)}</strong><small>{nextRadar.maxSpeed ? `${nextRadar.maxSpeed} km/sa kayıtlı limit` : "Sabit radar kaydı"}</small></div>}
-            <button className="locate-button" onClick={centerOnMe} disabled={!currentPoint} aria-label="Konumuma dön">⌖</button>
-          </div>
-
-          <div className="metric-grid">
-            <div className="metric-card accent"><span>YOL / HIZ SINIRI</span><strong>{roadInfo?.ref || roadInfo?.name || "—"} · {effectiveLimit ?? "—"}</strong><small>{roadInfo ? `${ROAD_KIND_LABELS[roadInfo.roadKind]} · ${selectedVehicle.label}` : roadStatus}</small></div>
-            <div className="metric-card"><span>KALAN YOL</span><strong>{formatDistance(remainingMeters)}</strong><small>{routeBusy ? "Rota hesaplanıyor…" : routeNote}</small></div>
-            <div className="metric-card"><span>TAHMİNİ VARIŞ</span><strong>{formatEta(etaSeconds)}</strong><small>{etaMode === "live" ? `Anlık ${Math.round(speed)} km/sa ile` : `${etaMode} km/sa sabit hız ile`}</small></div>
-            <div className="metric-card"><span>RADAR</span><strong>{nextRadar ? formatDistance(nextRadar.distance) : "—"}</strong><small>{nextRadar ? `${upcomingRadars.length} yaklaşan sabit radar kaydı` : radarStatus}</small></div>
-          </div>
-        </div>
-      </section>
-
-      <footer><span>Hız bilgisi harita verisi + seçilen araç sınıfına göre hesaplanan yardımcı referanstır; sahadaki trafik levhası ve resmi düzenleme önceliklidir.</span><span>Harita: OpenStreetMap · Rota: OSRM · Radar/Yol: OSM/Overpass</span></footer>
-    </main>
-  );
+function MiniIcon({name}:{name:string}){const paths:Record<string,string>={home:"M3 10.5 12 3l9 7.5V21H3V10.5zm6 10.5v-7h6v7",book:"M3 5c3-2 6-2 9 0v16c-3-2-6-2-9 0V5zm9 0c3-2 6-2 9 0v16c-3-2-6-2-9 0",calendar:"M4 6h16v15H4zM4 10h16M8 3v6M16 3v6",award:"M12 3a7 7 0 1 0 0 14 7 7 0 1 0 0-14ZM8 16l-1 6 5-3 5 3-1-6",chart:"M4 20V12h4v8M10 20V4h4v16M16 20v-9h4v9",settings:"M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.7-2.1 2.1m-8.6 8.6-2.1 2.1M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8",arrow:"M5 12h14m-6-6 6 6-6 6",clock:"M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18zm0 4v5l4 2",check:"M4 12l5 5L20 6",play:"M8 5l11 7-11 7z",back:"M19 12H5m6-6-6 6 6 6"};return <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.book}/></svg>}
+export default function Home(){
+ const [page,setPage]=useState<Page>("home");
+ const [progress,setProgress]=useState<StudyState>(EMPTY);
+ const [hydrated,setHydrated]=useState(false);
+ const [today,setToday]=useState(dateKey());
+ const [course,setCourse]=useState<CourseId>("tyt-mat");
+ const [search,setSearch]=useState("");
+ const [session,setSession]=useState<Session|null>(null);
+ const [now,setNow]=useState(Date.now());
+ const [examReport,setExamReport]=useState<{correct:number;incorrect:number;empty:number;net:number;track:string}|null>(null);
+ const [notice,setNotice]=useState("");
+ useEffect(()=>{try{const s=localStorage.getItem(STORAGE);if(s)setProgress(safeState(JSON.parse(s)));const q=localStorage.getItem(SESSION);if(q){const o=JSON.parse(q);if(o&&Array.isArray(o.questions)&&o.questions.length&&o.step!=="result")setSession(o)}}catch{}setToday(dateKey());setHydrated(true)},[]);
+ useEffect(()=>{if(hydrated)localStorage.setItem(STORAGE,JSON.stringify(progress))},[progress,hydrated]);
+ useEffect(()=>{if(hydrated){if(session&&session.step!=="result")localStorage.setItem(SESSION,JSON.stringify(session));else localStorage.removeItem(SESSION)}},[session,hydrated]);
+ useEffect(()=>{const timer=setInterval(()=>{setNow(Date.now());setToday(dateKey())},1000);return()=>clearInterval(timer)},[]);
+ const day=selectedDate(today);
+ const plan=useMemo(()=>dailyPlan(day,progress),[day,progress]);
+ const weak=useMemo(()=>weakTopics(progress),[progress]);
+ const due=useMemo(()=>dueTopics(progress),[progress]);
+ const current=plan.find(b=>!progress.finished[b.id])||plan[0];
+ const answeredCount=progress.answers.length;
+ const solvedTopics=new Set(progress.answers.map(a=>a.topicId)).size;
+ const studyMinutes=Object.values(progress.minutes).reduce((a,b)=>a+b,0);
+ const totalCorrect=progress.answers.filter(a=>a.correct).length;
+ const accuracy=answeredCount?Math.round(totalCorrect/answeredCount*100):0;
+ const maxDaily=180;
+ const dayMinutes=progress.minutes[day]||0;
+ const activeTopic=session?.topicId?getTopic(session.topicId):undefined;
+ const activeQ=session?.step==="quiz"?session.questions[session.index]:undefined;
+ const examTimeLimit=session?.examType==="TYT"?165*60:session?.examType==="AYT"?180*60:session?.examType==="Mini"?45*60:45*60;
+ const elapsed=session?Math.floor((now-session.startedAt)/1000):0;
+ const timeLeft=Math.max(0,examTimeLimit-elapsed);
+ const questionTotal=session?.questions.length||0;
+ const answered=session?Object.keys(session.selected).length:0;
+ function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
+  const n=progress.answers.filter(a=>a.topicId===topic.id).length;
+  setSession({questions:makeQuiz(topic,mode==="tekrar"?15:12,n),step:"learn",index:0,selected:{},mode,topicId:topic.id,blockId:block?.id,startedAt:Date.now(),questionStartedAt:Date.now()});
+  setExamReport(null);setPage("home");
+ }
+ function startExam(track:"Mini"|"TYT"|"AYT",block?:StudyBlock){
+  const seed=progress.exams.length+1;
+  setSession({questions:makeExam(track,seed),step:"quiz",index:0,selected:{},mode:"deneme",blockId:block?.id,examType:track,startedAt:Date.now(),questionStartedAt:Date.now()});
+  setExamReport(null);setPage("home");
+ }
+ function startBlock(block:StudyBlock){
+  if(block.type==="deneme"){startExam("Mini",block);return;}
+  const t=getTopic(block.topicId||"");if(t)startTopic(t,block,block.type==="tekrar"?"tekrar":"ders");
+ }
+ function finish(s:Session){
+  const records:AnswerRecord[]=s.questions.map((q,i)=>({questionId:q.id,topicId:q.topicId,correct:s.selected[i]===q.answer,selected:s.selected[i]??-1,seconds:Math.round((Date.now()-s.startedAt)/1000/Math.max(s.questions.length,1)),at:new Date().toISOString(),kind:s.mode}));
+  const correct=records.filter(r=>r.correct).length,incorrect=records.filter(r=>r.selected!==-1&&!r.correct).length,empty=records.filter(r=>r.selected===-1).length;
+  const report={correct,incorrect,empty,net:Math.round((correct-incorrect*.25)*100)/100,track:s.examType||"Konu testi"};
+  setExamReport(report);
+  const minutes=clamp(Math.round((Date.now()-s.startedAt)/60000),1,s.examType==="TYT"?165:s.examType==="AYT"?180:45);
+  const date=dateKey();
+  setProgress(prev=>({...prev,answers:[...prev.answers,...records],exams:s.examType?[...prev.exams,{id:crypto.randomUUID(),track:s.examType,at:new Date().toISOString(),correct,incorrect,empty,net:report.net,seconds:Math.floor((Date.now()-s.startedAt)/1000)}]:prev.exams,minutes:{...prev.minutes,[date]:(prev.minutes[date]||0)+minutes},finished:s.blockId?{...prev.finished,[s.blockId]:new Date().toISOString()}:prev.finished,activeTopicId:s.topicId}));
+  setSession({...s,step:"result"});
+ }
+ useEffect(()=>{if(session?.step==="quiz"&&session.examType&&timeLeft===0)finish(session);/* time triggered, do not restart timer */},[session?.step,session?.examType,timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
+ function markChoice(index:number){if(!session||session.step!=="quiz")return;setSession(s=>s?{...s,selected:{...s.selected,[s.index]:index}}:s)}
+ function nextQuestion(){
+  if(!session)return;
+  if(session.index+1===session.questions.length){finish(session)}else setSession({...session,index:session.index+1,questionStartedAt:Date.now()});
+ }
+ function nav(next:Page){setPage(next);setNotice("");}
+ function resetData(){
+  if(window.confirm("Tüm kişisel ilerleme ve denemeler bu tarayıcıdan silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setSession(null);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
+ }
+ function exportData(){
+  const payload=JSON.stringify({version:1,exportedAt:new Date().toISOString(),progress},null,2);
+  const blob=new Blob([payload],{type:"application/json"}),url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download="yks-2027-yedek-"+dateKey()+".json";a.click();URL.revokeObjectURL(url);
+  setNotice("Yedek JSON dosyan indirildi.");
+ }
+ async function importData(event:React.ChangeEvent<HTMLInputElement>){
+  const f=event.target.files?.[0];if(!f)return;
+  try{const obj=JSON.parse(await f.text());if(!obj.progress||!Array.isArray(obj.progress.answers))throw Error("Geçersiz dosya");
+   if(!window.confirm("Yedekteki ilerleme mevcut kayıtların yerine geçecek. Devam edilsin mi?"))return;
+   setProgress(safeState(obj.progress));setSession(null);setNotice("Yedek başarıyla yüklendi.");
+  }catch{setNotice("Yedek dosyası geçersiz.")}
+  event.target.value="";
+ }
+ const statsByCourse=COURSES.map(c=>{const ids=topicsByCourse(c.id).map(t=>t.id);const answers=progress.answers.filter(a=>ids.includes(a.topicId));return {...c,count:ids.length,attempted:new Set(answers.map(a=>a.topicId)).size,percent:answers.length?Math.round(answers.filter(a=>a.correct).length/answers.length*100):0}});
+ const filtered=topicsByCourse(course).filter(t=>t.title.toLocaleLowerCase("tr-TR").includes(search.toLocaleLowerCase("tr-TR")));
+ const menus:{id:Page;text:string;icon:string}[]=[{id:"home",text:"Bugün",icon:"home"},{id:"subjects",text:"Konu Kütüphanesi",icon:"book"},{id:"calendar",text:"8 Aylık Takvim",icon:"calendar"},{id:"exams",text:"Deneme Merkezi",icon:"award"},{id:"analytics",text:"Analizlerim",icon:"chart"},{id:"settings",text:"Ayarlar & Yedek",icon:"settings"}];
+ return <div className="layout">
+  <aside className="sidebar">
+   <div className="brand"><div className="brand-mark">Y<span>+</span></div><div><strong>YKS Akademi</strong><small>2027 KİŞİSEL KOÇ</small></div></div>
+   <div className="goal-card"><span className="tiny-label">HEDEFİN</span><strong>Akdeniz Üniversitesi</strong><span>Psikoloji · Eşit Ağırlık</span><div className="goal-line"><b>İlk 35.000</b><span>2027 YKS</span></div></div>
+   <span className="nav-caption">ÇALIŞMA ALANI</span>
+   <nav className="side-nav">{menus.map(m=><button key={m.id} onClick={()=>nav(m.id)} className={page===m.id?"active":""}><MiniIcon name={m.icon}/><span>{m.text}</span>{m.id==="analytics"&&weak.length>0?<em>{weak.length}</em>:null}</button>)}</nav>
+   <div className="side-bottom"><div className="mini-avatar">Y</div><div><strong>YKS Yolculuğun</strong><small>{currentWeek(day)}. hafta · Günde 3 saat</small></div></div>
+  </aside>
+  <main className="main">
+   <header className="topbar"><div className="topbar-title"><span className="eyebrow">2027 YKS HAZIRLIK PLATFORMU</span><h1>{session?"Çalışma oturumu":page==="home"?"Bugün seni neler bekliyor?":page==="subjects"?"Konu kütüphanesi":page==="calendar"?"8 aylık çalışma planın":page==="exams"?"Deneme merkezi":page==="analytics"?"Performans analizi":"Ayarlar ve yedekleme"}</h1><p>{session?"Konu anlatımı, çözümlü sorular ve kişisel öğrenme analizi.":page==="home"?"Her gün 3 saat. Her hafta yeni bir adım.":"Hedefin için hazırlanan çalışma sistemin."}</p></div><div className="header-actions"><span className="date-chip"><MiniIcon name="calendar"/>{prettyDate(today)}</span><span className="target-chip">EA · 2027</span></div></header>
+   {!hydrated?<div className="panel empty">Çalışma verilerin yükleniyor…</div>:session? <section className="session-wrap">
+    <div className="session-bar"><button className="back-link" onClick={()=>{if(window.confirm("Oturumu kapatırsan ilerleyen soruların bu oturum için kaydedilmez. Devam?"))setSession(null)}}><MiniIcon name="back"/> Çalışmaya dön</button><div className="session-meta"><span><MiniIcon name="clock"/>{session.examType?formatDuration(timeLeft)+" kaldı":formatDuration(elapsed)}</span><b>{session.step==="learn"?"Konu anlatımı":session.step==="result"?"Tamamlandı":(session.index+1)+"/"+questionTotal+" soru"}</b></div></div>
+    {session.step==="learn"&&activeTopic?<div className="lesson-layout">
+      <article className="panel lesson-panel"><div className="subject-tag">{getCourse(activeTopic.courseId).label}</div><h2>{activeTopic.title}</h2><p className="intro">{activeTopic.summary}</p><h3>Konunun temel kuralları</h3><div className="lesson-principles">{activeTopic.principles.map((line,i)=><div key={i} className="principle"><span>{i+1}</span><p>{line}</p></div>)}</div><h3>Adım adım çözümlü örnek</h3><div className="example"><strong>{activeTopic.worked}</strong><div className="example-solution"><span>ÇÖZÜM</span><p>{activeTopic.solution}</p></div></div><h3>Sınavda dikkat edilecekler</h3><p>Önce sorunun ne istediğini belirle. Tanımı ezberlemek yerine verilenleri adım adım kullan. İşlem ve yorum hatası yaparsan hatanın hangi basamakta başladığını not al. Çözümü tekrar kapatıp kendin yap.</p><div className="lesson-actions"><button className="btn ghost" onClick={()=>window.print()}>Yazdır / PDF kaydet</button><button className="btn primary" onClick={()=>setSession(s=>s?{...s,step:"quiz",startedAt:Date.now(),questionStartedAt:Date.now()}:s)}><MiniIcon name="play"/> Teste geç · {session.questions.length} soru</button></div></article>
+      <aside className="panel lesson-side"><div className="eyebrow">ÖĞRENME ROTAN</div><h3>Konu → Test → Analiz</h3><p>Bu konudaki soruları cevapladıktan sonra sonuçların kaydedilecek. Düşük başarı gösterdiğin konular çarşamba tekrarına alınır.</p><div className="tipline"><MiniIcon name="clock"/> 45 dakikalık oturum</div><div className="tipline"><MiniIcon name="check"/> Çözümlü sorular</div><div className="tipline"><MiniIcon name="chart"/> Kalıcı ilerleme analizi</div></aside>
+    </div>:session.step==="quiz"&&activeQ?<div className="panel quiz-card"><div className="quiz-top"><div><span className="subject-tag">{getCourse((getTopic(activeQ.topicId)||TOPICS[0]).courseId).label}</span><h2>{session.examType?session.examType+" denemesi":getTopic(activeQ.topicId)?.title}</h2></div><span className="difficulty">{activeQ.difficulty}</span></div><div className="progress-rail"><div style={{width:((session.index+1)/questionTotal)*100+"%"}}/></div><div className="question-number">SORU {session.index+1} / {questionTotal}</div><div className="question-text">{activeQ.prompt}</div><div className="choices">{activeQ.choices.map((opt,i)=>{const selected=session.selected[session.index]===i;const reveal=!session.examType&&session.selected[session.index]!==undefined;return <button key={i} disabled={reveal} className={"choice "+(selected?"chosen ":"")+(reveal&&i===activeQ.answer?"correct ":"")+(reveal&&selected&&i!==activeQ.answer?"wrong":"")} onClick={()=>markChoice(i)}><span>{String.fromCharCode(65+i)}</span><b>{opt}</b>{reveal&&i===activeQ.answer?<MiniIcon name="check"/>:null}</button>})}</div>{session.selected[session.index]!==undefined&&!session.examType?<div className="answer-explain"><strong>{session.selected[session.index]===activeQ.answer?"Doğru cevap":"Doğru cevabı öğren"}</strong><p>{activeQ.solution}</p></div>:null}<div className="quiz-bottom"><span>{answered} / {questionTotal} cevaplandı</span><div className="button-row">{session.examType?<button className="btn ghost" onClick={nextQuestion}>{session.index+1===questionTotal?"Denemeyi bitir":"Boş bırak / İlerle"}</button>:null}<button className="btn primary" disabled={!session.examType&&session.selected[session.index]===undefined} onClick={nextQuestion}>{session.index+1===questionTotal?"Testi tamamla":"Sonraki soru"} <MiniIcon name="arrow"/></button></div></div></div>:session.step==="result"&&examReport?<div className="panel results"><div className="result-symbol"><MiniIcon name="award"/></div><span className="eyebrow">OTURUM TAMAMLANDI</span><h2>{session.examType?"Deneme sonucun kaydedildi":"Konu testin tamamlandı"}</h2><p>Doğru ve yanlışların kişisel öğrenme profiline kaydedildi. Eksik konular tekrar planına aktarılacak.</p><div className="result-grid"><div><strong>{examReport.correct}</strong><span>Doğru</span></div><div><strong>{examReport.incorrect}</strong><span>Yanlış</span></div><div><strong>{examReport.empty}</strong><span>Boş</span></div><div><strong>{examReport.net}</strong><span>Net</span></div></div><div className="result-actions"><button className="btn ghost" onClick={()=>{setSession(null);nav("analytics")}}>Analizimi gör</button><button className="btn primary" onClick={()=>{setSession(null);nav("home")}}>Günlük programa dön <MiniIcon name="arrow"/></button></div></div>:null}
+   </section>:<>
+    {page==="home"&&<>
+     <section className="welcome"><div><span className="eyebrow light">KİŞİSEL ÇALIŞMA PLANI</span><h2>Hedefin belli.<br/>Bugün bir adım daha ilerle.</h2><p>Akdeniz Üniversitesi Psikoloji için TYT ve AYT eşit ağırlık hazırlığın. Öğrendikçe güçlenen bir program.</p><button className="btn white" onClick={()=>{if(current)startBlock(current);else nav("subjects")}}><MiniIcon name="play"/>{current?"Çalışmaya başla":"Konu seç ve başla"} <MiniIcon name="arrow"/></button></div><div className="hero-orbit"><div className="orb"><strong>2027</strong><span>YKS</span></div><span className="orbit-ring first"/><span className="orbit-ring second"/></div></section>
+     {today<START_DATE?<div className="info-banner">Programın ilk günü 19 Ekim Pazartesi. İstersen ilk dersi şimdiden başlatabilirsin.</div>:null}
+     <section className="metric-grid"><div className="metric"><span>TOPLAM ÇÖZÜLEN</span><strong>{answeredCount}</strong><small>soru</small></div><div className="metric"><span>DOĞRULUK ORANI</span><strong>%{accuracy}</strong><small>tüm testler</small></div><div className="metric"><span>ÇALIŞMA SÜRESİ</span><strong>{Math.floor(studyMinutes/60)}<i>sa</i> {studyMinutes%60}<i>dk</i></strong><small>kaydedilen süre</small></div><div className="metric"><span>ÇALIŞILAN KONU</span><strong>{solvedTopics}</strong><small>/ {TOPICS.length} konu</small></div></section>
+     <section className="dashboard-grid"><div className="panel today-panel"><div className="section-heading"><div><span className="eyebrow">GÜNLÜK PROGRAM</span><h2>{prettyDate(day)}</h2></div><span className="time-pill">180 dk · 4 oturum</span></div><div className="daily-progress"><div><b>Bugünkü ilerleme</b><span>{Math.min(dayMinutes,maxDaily)} / 180 dk</span></div><div className="progress-rail"><div style={{width:Math.min(100,dayMinutes/maxDaily*100)+"%"}}/></div></div>{plan.length? <div className="block-list">{plan.map((b,i)=>{const done=!!progress.finished[b.id];const crs=b.courseId==="mock"?undefined:b.courseId==="review"?undefined:getCourse(b.courseId);return <div key={b.id} className={"study-row "+(done?"done":"")}><div className="row-time">{String(i+1).padStart(2,"0")}</div><div className="row-main"><span className="topic-type" style={{color:crs?.color||"#7285a0"}}>{b.type==="tekrar"?"TEKRAR":b.type==="deneme"?"DENEME":crs?.label.toLocaleUpperCase("tr-TR")}</span><h3>{b.title}</h3><span className="muted">45 dakika · {b.type==="deneme"?"30 soru":b.type==="tekrar"?"15 soru":"12 soru"}</span></div><button disabled={done} className={"row-btn "+(done?"is-done":"")} onClick={()=>startBlock(b)}>{done?<MiniIcon name="check"/>:<MiniIcon name="arrow"/>}</button></div>})}</div>:<div className="empty">Pazar günü dinlenme ve hafif tekrar günü. İstersen kütüphaneden konu seçebilirsin.</div>}</div><div className="side-stack"><div className="panel focus"><span className="eyebrow">BU HAFTAKİ DURUM</span><h2>{currentWeek(day)}. hafta</h2><div className="focus-large">{35-currentWeek(day)}<small> hafta kalan (yaklaşık)</small></div><p>2027 YKS sınav tarihi açıklandığında takvimi resmî tarihe göre ayarla.</p><button className="text-link" onClick={()=>nav("calendar")}>Takvimi incele <MiniIcon name="arrow"/></button></div><div className="panel focus"><span className="eyebrow">AKILLI TEKRAR</span><h2>Eksiklerin takipte</h2>{weak.length?<><p>{weak.length} konuda pekiştirme öneriliyor. En düşük başarıdan başlayalım.</p><button className="btn outline" onClick={()=>startTopic(weak[0],undefined,"tekrar")}>Tekrara başla</button></>:<p>Henüz düşük başarı tespit edilmedi. Testler çözdükçe tekrar listesi oluşacak.</p>}</div></div></section>
+     <div className="below-note"><MiniIcon name="book"/> İçerik kütüphanesinde <b>{TOPICS.length} konu</b> yüklü. Sorular derslere gömülü özgün ve üretilebilir örneklerden oluşur; resmî ÖSYM soruları değildir.</div>
+    </>}
+    {page==="subjects"&&<div className="library-layout"><div className="panel subject-sidebar"><div className="eyebrow">DERSLER</div><div className="track-label">TYT</div>{statsByCourse.filter(c=>c.track==="TYT").map(c=><button key={c.id} className={"course-item "+(course===c.id?"active":"")} onClick={()=>{setCourse(c.id);setSearch("")}}><span className="course-dot" style={{background:c.color}}/><span>{c.label}</span><small>{c.count}</small></button>)}<div className="track-label">AYT</div>{statsByCourse.filter(c=>c.track==="AYT").map(c=><button key={c.id} className={"course-item "+(course===c.id?"active":"")} onClick={()=>{setCourse(c.id);setSearch("")}}><span className="course-dot" style={{background:c.color}}/><span>{c.label}</span><small>{c.count}</small></button>)}</div><div className="panel topics-panel"><div className="section-heading"><div><span className="eyebrow">KONU ANLATIMLARI VE TESTLER</span><h2>{getCourse(course).label}</h2><p>{filtered.length} konu · konu anlatımı, örnek çözüm ve test</p></div></div><label className="search-field"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Bu derste konu ara…"/></label><div className="topic-list">{filtered.map((t,i)=>{const s=topicStats(progress,t.id);return <div className="topic-row" key={t.id}><div className="topic-no">{String(t.index+1).padStart(2,"0")}</div><div className="topic-body"><strong>{t.title}</strong><span>{s.count?s.count+" soru çözüldü · %"+s.accuracy+" doğruluk":"Henüz çalışılmadı"}</span></div><div className={"topic-status "+(s.weak?"low":s.mastery>=72?"ok":"")}>{s.count?(s.weak?"Tekrar":s.mastery>=72?"İyi":"Gelişiyor"):"Yeni"}</div><button className="small-btn" onClick={()=>startTopic(t)}>Çalış <MiniIcon name="arrow"/></button></div>})}</div></div></div>}
+    {page==="calendar"&&<div className="panel calendar-page"><div className="section-heading"><div><span className="eyebrow">19 EKİM 2026 – 20 HAZİRAN 2027</span><h2>35 haftalık hazırlık programı</h2><p>Haftada 6 gün, günde 4×45 dakika net çalışma. Çarşamba tekrar, cumartesi deneme.</p></div></div><div className="week-rule">{weekDays.map((d,i)=><div key={d}><b>{d}</b><span>{i===6?"Dinlenme":i===5?"Deneme + analiz":i===2?"Eksik pekiştirme":"Konu + test"}</span></div>)}</div><div className="week-grid">{monthPlan(progress).map(w=><div key={w.week} className={"week-box "+(w.week===currentWeek(day)?"current":"")}><span>HAFTA {String(w.week).padStart(2,"0")}</span><strong>{new Date(w.from+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"short"})}</strong><small>{w.week===currentWeek(day)?"Şu anki haftan":"4 günlük oturum / başlangıç günü"}</small></div>)}</div><div className="info-banner">Bu plan 2027 YKS takvimi kesinleşmediği için yaklaşık bitiş tarihiyle hazırlandı. Gerekirse son haftanın tarihi düzenlenmelidir.</div></div>}
+    {page==="exams"&&<><div className="exam-grid">{[{type:"Mini" as const,title:"Haftalık mini deneme",count:30,time:"45 dakika",info:"TYT ve AYT konularından karışık, hızlı tarama."},{type:"TYT" as const,title:"TYT genel deneme",count:120,time:"165 dakika",info:"Türkçe 40, sosyal 20, matematik 40, fen 20 dağılımı."},{type:"AYT" as const,title:"AYT eşit ağırlık",count:80,time:"180 dakika",info:"Matematik 40, edebiyat 24, tarih-1 10, coğrafya-1 6."}].map(e=><div key={e.type} className="panel exam-card"><span className="eyebrow">{e.type==="Mini"?"KISA TARAMA":e.type+" GENEL DENEME"}</span><h2>{e.title}</h2><p>{e.info}</p><div className="exam-stats"><span><b>{e.count}</b> soru</span><span><b>{e.time}</b></span></div><button className="btn primary" onClick={()=>startExam(e.type)}>Denemeyi başlat <MiniIcon name="arrow"/></button></div>)}</div><div className="panel history-panel"><div className="section-heading"><h2>Deneme geçmişin</h2></div>{progress.exams.length?progress.exams.slice().reverse().map(e=><div className="history-row" key={e.id}><span>{e.track} · {new Date(e.at).toLocaleDateString("tr-TR")}</span><strong>{e.net} net</strong><small>{e.correct} D · {e.incorrect} Y · {e.empty} B</small></div>):<p className="muted">Henüz deneme çözmedin. İlk denemenden sonra sonuçlar burada saklanır.</p>}</div><div className="info-banner">Bu denemeler özgün alıştırma sorularından oluşturulmuştur. Resmî ÖSYM denemesi ya da gerçek sınav puanı hesaplayıcısı değildir.</div></>}
+    {page==="analytics"&&<><div className="metric-grid"><div className="metric"><span>TOPLAM SORU</span><strong>{answeredCount}</strong></div><div className="metric"><span>DOĞRULUK</span><strong>%{accuracy}</strong></div><div className="metric"><span>PEKİŞTİRME</span><strong>{due.length}</strong><small>tekrarlanması gereken konu</small></div><div className="metric"><span>DENEMELER</span><strong>{progress.exams.length}</strong></div></div><div className="analytics-grid"><div className="panel"><div className="section-heading"><h2>Derslere göre başarı</h2></div><div className="bars">{statsByCourse.map(c=><div className="barrow" key={c.id}><div><b>{c.label}</b><span>{c.attempted}/{c.count} konu · %{c.percent}</span></div><div className="bar-track"><div style={{width:c.percent+"%",background:c.color}}/></div></div>)}</div></div><div className="panel"><div className="section-heading"><h2>Öncelikli tekrar listesi</h2></div>{weak.length?weak.slice(0,12).map(t=><div className="weak-item" key={t.id}><div><strong>{t.title}</strong><span>{getCourse(t.courseId).label} · %{topicStats(progress,t.id).accuracy} doğru</span></div><button className="small-btn" onClick={()=>startTopic(t,undefined,"tekrar")}>Pekiştir</button></div>):<p className="muted">Yeterli yanlış verisi olduğunda zorlandığın konuları burada göreceksin. Üç veya daha fazla yanıtla değerlendirme başlar.</p>}</div></div></>}
+    {page==="settings"&&<div className="settings-grid"><div className="panel settings-card"><span className="eyebrow">VERİ GÜVENLİĞİ</span><h2>İlerlemen bu cihazda saklanır</h2><p>Hesap açmak gerekmez. Kayıtlar tarayıcının yerel depolama alanına yazılır. Farklı cihazlar arasında otomatik eşitleme yapılmaz. Düzenli yedek almanı öneririz.</p><div className="settings-actions"><button className="btn primary" onClick={exportData}>İlerleme yedeğini indir</button><label className="btn outline upload-btn">JSON yedeği yükle<input type="file" accept=".json,application/json" onChange={importData}/></label></div>{notice?<div className="info-banner">{notice}</div>:null}</div><div className="panel settings-card"><span className="eyebrow">KİŞİSEL HEDEF</span><h2>Akdeniz Üniversitesi · Psikoloji</h2><dl><dt>Hedef sıralama</dt><dd>EA ilk 35.000</dd><dt>Günlük net çalışma</dt><dd>180 dakika</dd><dt>Program başlangıcı</dt><dd>19 Ekim 2026</dd><dt>Plan bitişi</dt><dd>20 Haziran 2027 (tahmini)</dd><dt>İçerik</dt><dd>{TOPICS.length} konu · {COURSES.length} ders</dd></dl><button className="btn danger" onClick={resetData}>Tüm ilerlemeyi sıfırla</button></div><div className="panel settings-card"><span className="eyebrow">İÇERİK HAKKINDA</span><h2>Özgün ders arşivi</h2><p>Tüm ders başlıkları, temel anlatımlar, çözümlü örnekler ve konu testleri uygulama içine eklenmiştir. Matematik sorularının bir kısmı sayıları değişen üretilebilir sorulardır. Diğer sorular konu kazanımları ve örnekler üzerinden oluşturulur. Yayımlanmış ÖSYM sorularının birebir kopyaları bulunmaz.</p><p>Bu başlangıç arşivi tam kapsamlı, editör denetiminden geçmiş sınav kitabı yerine geçmez. Konu anlatımlarının derinliği ve soru çeşitliliği derslere göre değişir; öğrenmede ana kaynağa ve resmî müfredata da başvur.</p><a href="https://www.osym.gov.tr" target="_blank" rel="noreferrer" className="text-link">ÖSYM resmî sitesi <MiniIcon name="arrow"/></a></div></div>}
+   </>}
+   <footer className="footer"><span>YKS Akademi 2027 · Kişisel çalışma platformu</span><span>ÖSYM ile bağlantılı resmî bir hizmet değildir.</span></footer>
+  </main>
+  {!session&&<nav className="mobile-nav">{menus.slice(0,5).map(m=><button key={m.id} className={page===m.id?"active":""} onClick={()=>nav(m.id)}><MiniIcon name={m.icon}/><small>{m.text.split(" ")[0]}</small></button>)}</nav>}
+ </div>
 }

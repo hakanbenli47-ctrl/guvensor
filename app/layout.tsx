@@ -1,24 +1,11 @@
-import type { Metadata, Viewport } from "next";
+import type { Metadata,Viewport } from "next";
 import "./globals.css";
-
-export const metadata: Metadata = {
-  title: "Canlı Hız ve Varış Takibi",
-  description: "GPS ile anlık hız, hedefe kalan mesafe ve tahmini varış süresi takibi.",
+export const metadata:Metadata={
+ title:"YKS Akademi 2027 | Kişisel Eğitim Koçu",
+ description:"Akdeniz Üniversitesi Psikoloji hedefi için 196 konulu TYT ve AYT hazırlık platformu; akıllı tekrar, deneme ve ilerleme analizi.",
+ applicationName:"YKS Akademi",
+ icons:{icon:"/icon.svg"},
+ manifest:"/manifest.webmanifest",
 };
-
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: "#07111d",
-};
-
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return (
-    <html lang="tr">
-      <head>
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-      </head>
-      <body>{children}</body>
-    </html>
-  );
-}
+export const viewport:Viewport={width:"device-width",initialScale:1,themeColor:"#141f35"};
+export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="tr"><body>{children}</body></html>}
