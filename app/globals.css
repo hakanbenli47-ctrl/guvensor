@@ -157,3 +157,7 @@
 .academy-sync.failed{background:#fff1f1;border-color:#ffdada;color:#b14444}
 @media(max-width:1050px){.academy-action-grid{grid-template-columns:1fr}}
 @media(max-width:600px){.academy-task-panel{padding:17px}.academy-task-row{gap:10px}.academy-sync{font-size:9px;padding:7px}.academy-task-row .small-btn{min-width:74px}}
+
+.academy-session-auto{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#2b9161;font-weight:800;margin-right:10px;white-space:nowrap}
+.academy-session-auto svg{width:15px;height:15px}
+@media(max-width:620px){.academy-session-auto{font-size:9px;margin-right:0}}
