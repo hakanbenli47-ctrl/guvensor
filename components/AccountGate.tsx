@@ -17,7 +17,7 @@ function AuthScreen({onSignedIn}:{onSignedIn:(user:User)=>void}){
   e.preventDefault();if(!supabase||busy)return;
   setBusy(true);setError("");setMessage("");
   try{
-   const eMail=email.trim().toLocaleLowerCase("tr-TR");
+   const eMail=email.trim().toLowerCase();
    if(mode==="reset"){
     const {error}=await supabase.auth.resetPasswordForEmail(eMail,{redirectTo:window.location.origin});
     if(error)throw error;
