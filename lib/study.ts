@@ -1,4 +1,5 @@
 import {COURSES,TOPICS,getTopic,topicsByCourse,type CourseId,type Topic} from "./curriculum";
+import {curatedQuestions} from "./curated-bank";
 
 export interface Question {id:string;topicId:string;prompt:string;choices:string[];answer:number;solution:string;difficulty:"Kolay"|"Orta"|"Zor";kind:"hesaplama"|"kavrama";}
 export interface AnswerRecord {questionId:string;topicId:string;correct:boolean;selected:number;seconds:number;at:string;kind:"ders"|"deneme"|"tekrar";}
@@ -89,12 +90,20 @@ export const makeQuestion=(t:Topic,index:number):Question=>{
  const value=(t.courseId.endsWith("mat")||t.courseId==="tyt-geo")?mathQuestion(t,index):null;
  return value??conceptQuestion(t,index);
 };
-export const makeQuiz=(topic:Topic,count=12,seed=0):Question[]=>Array.from({length:count},(_,i)=>makeQuestion(topic,seed+i));
+export function makeQuiz(topic:Topic,count=12,seed=0):Question[]{
+ const curated=curatedQuestions(topic.id);
+ // Use original, manually-authored questions where the course bank is ready.
+ // All remaining positions are practice templates, not represented as past YKS questions.
+ return Array.from({length:count},(_,i)=>{
+  if(i<curated.length)return curated[(seed+i)%curated.length];
+  return makeQuestion(topic,seed+i);
+ });
+}
 export function makeExam(track:"TYT"|"AYT"|"Mini",seed:number):Question[]{
  const subjects:CourseId[]= track==="TYT" ? ["tyt-turkce","tyt-mat","tyt-tarih","tyt-cografya","tyt-felsefe","tyt-din","tyt-fizik","tyt-kimya","tyt-biyoloji","tyt-geo"] : track==="AYT"? ["ayt-mat","ayt-edebiyat","ayt-tarih","ayt-cografya"] : ["tyt-mat","tyt-turkce","ayt-mat","ayt-edebiyat","ayt-tarih","ayt-cografya"];
  const distribution:Record<string,number>= track==="TYT" ? {"tyt-turkce":40,"tyt-mat":32,"tyt-geo":8,"tyt-tarih":5,"tyt-cografya":5,"tyt-felsefe":5,"tyt-din":5,"tyt-fizik":7,"tyt-kimya":7,"tyt-biyoloji":6} : track==="AYT" ? {"ayt-mat":40,"ayt-edebiyat":24,"ayt-tarih":10,"ayt-cografya":6} : {"tyt-mat":7,"tyt-turkce":7,"ayt-mat":7,"ayt-edebiyat":5,"ayt-tarih":2,"ayt-cografya":2};
  let result:Question[]=[];
- subjects.forEach((course,k)=>{const ts=topicsByCourse(course);for(let i=0;i<(distribution[course]||0);i++){const topic=ts[(i+seed+k*3)%ts.length];result.push(makeQuestion(topic,seed*101+i+k*1000));}});
+ subjects.forEach((course,k)=>{const ts=topicsByCourse(course);for(let i=0;i<(distribution[course]||0);i++){const topic=ts[(i+seed+k*3)%ts.length];result.push(makeQuiz(topic,1,seed*101+i+k*1000)[0]);}});
  return result.map((q,i)=>({...q,id:track+"-"+seed+"-"+i}));
 }
 export function topicStats(state:StudyState,topicId:string){
