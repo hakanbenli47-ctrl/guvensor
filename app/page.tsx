@@ -5,11 +5,12 @@ import AccountGate from "../components/AccountGate";
 import {supabase,PROGRESS_TABLE} from "../lib/cloud";
 import {PLACEMENT,calculatePlacement,PLACEMENT_TIME_MINUTES} from "../lib/placement";
 import {detailed,DETAILED_LESSON_COUNT} from "../lib/deep-lessons";
+import {combinedDrafts,draftKey,freezeDraft,resumeDraft,safeDraftCollection,validDraft,sessionDescription,type StudySession,type DraftCollection} from "../lib/session-drafts";
 import {COURSES,TOPICS,getTopic,getCourse,topicsByCourse,type CourseId,type Topic} from "../lib/curriculum";
 import {EMPTY,END_DATE,START_DATE,completionPercent,currentWeek,dailyPlan,missedBlocks,dateKey,dueTopics,formatDuration,makeExam,makeQuiz,monthPlan,selectedDate,topicStats,weakTopics,type Question,type StudyBlock,type StudyState,type AnswerRecord} from "../lib/study";
-type Page="home"|"subjects"|"calendar"|"exams"|"analytics"|"settings";
+type Page="home"|"tasks"|"subjects"|"calendar"|"exams"|"analytics"|"settings";
 type Mode="ders"|"tekrar"|"deneme";
-type Session={questions:Question[];step:"learn"|"quiz"|"result";index:number;selected:Record<number,number>;mode:Mode;topicId?:string;blockId?:string;examType?:"Mini"|"TYT"|"AYT"|"Seviye";startedAt:number;questionStartedAt:number;pausedAt?:number;lessonSection?:number;};
+type Session=StudySession;
 const STORAGE="yks-koc-2027-progress-v1", SESSION="yks-koc-2027-session-v1";
 const prettyDate=(iso:string)=>new Date(iso+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric",weekday:"long"});
 const weekDays=["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"];
@@ -37,8 +38,9 @@ function Dashboard({user}:{user:User}){
  const [course,setCourse]=useState<CourseId>("tyt-mat");
  const [search,setSearch]=useState("");
  const [session,setSession]=useState<Session|null>(null);
- const [sessionHidden,setSessionHidden]=useState(false);
+ const [drafts,setDrafts]=useState<DraftCollection>({});
  const [showAllMakeups,setShowAllMakeups]=useState(false);
+ const [showAllAttention,setShowAllAttention]=useState(false);
  const [now,setNow]=useState(Date.now());
  const [examReport,setExamReport]=useState<{correct:number;incorrect:number;empty:number;net:number;track:string}|null>(null);
  const [notice,setNotice]=useState("");
@@ -47,6 +49,8 @@ function Dashboard({user}:{user:User}){
  const [syncStatus,setSyncStatus]=useState<"loading"|"saving"|"saved">("loading");
  const [retrySave,setRetrySave]=useState(0);
  const saveQueue=useRef<Promise<void>>(Promise.resolve());
+ const saveRevision=useRef(0);
+ const localCacheKey="guvensor-autosave-v2:"+user.id;
  useEffect(()=>{
   let alive=true;
   const client=supabase;
@@ -56,24 +60,43 @@ function Dashboard({user}:{user:User}){
     const {data,error}=await client!.from(PROGRESS_TABLE).select("payload,updated_at").eq("user_id",user.id).maybeSingle();
     if(!alive)return;
     if(error)throw error;
-    let incoming:StudyState=EMPTY,restored:Session|null=null;
-    if(data?.payload && typeof data.payload==="object"){
-      const payload=data.payload as {progress?:unknown;session?:unknown};
+    let incoming:StudyState=EMPTY,restoredDrafts:DraftCollection={};
+    const serverSavedAt=data?.updated_at?new Date(data.updated_at).getTime():0;
+    if(data?.payload&&typeof data.payload==="object"){
+      const payload=data.payload as {progress?:unknown;session?:unknown;drafts?:unknown};
       incoming=safeState(payload.progress);
-      const old=payload.session as Session|null;
-      if(old&&Array.isArray(old.questions)&&old.questions.length&&old.step!=="result")restored=old;
+      restoredDrafts=safeDraftCollection(payload.drafts,serverSavedAt||Date.now());
+      // Older cloud records had only one unfinished session. Never discard it.
+      if(validDraft(payload.session)){
+       const old=freezeDraft(payload.session,payload.session.pausedAt??(serverSavedAt||Date.now()));
+       if(!restoredDrafts[draftKey(old)])restoredDrafts[draftKey(old)]=old;
+      }
     }else{
       try{
         const legacy=localStorage.getItem(STORAGE);
         if(legacy&&window.confirm("Bu cihazdaki eski çalışma kayıtlarını hesabına aktarmak ister misin?")){
           incoming=safeState(JSON.parse(legacy));
           const raw=localStorage.getItem(SESSION);
-          if(raw){const previous=JSON.parse(raw) as Session;if(previous?.questions?.length&&previous.step!=="result")restored=previous;}
+          if(raw){
+           const previous=JSON.parse(raw);
+           if(validDraft(previous)){const old=freezeDraft(previous);restoredDrafts[draftKey(old)]=old;}
+          }
         }
       }catch{}
     }
+    // Restore changes that were recorded locally just before the device closed,
+    // but whose cloud save did not finish. User account IDs isolate this cache.
+    try {
+      const local=JSON.parse(localStorage.getItem(localCacheKey)||"null") as
+       {pending?:boolean;savedAt?:number;payload?:{progress?:unknown;drafts?:unknown}}|null;
+      if(local?.pending&&local.payload&&typeof local.savedAt==="number"&&local.savedAt>serverSavedAt){
+       incoming=safeState(local.payload.progress);
+       restoredDrafts=safeDraftCollection(local.payload.drafts,local.savedAt);
+      }
+    }catch{}
     if(!alive)return;
-    setProgress(incoming);setSession(restored?{...restored,pausedAt:restored.pausedAt??(data?.updated_at?new Date(data.updated_at).getTime():Date.now())}:null);setSessionHidden(Boolean(restored));setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
+    setProgress(incoming);setDrafts(restoredDrafts);setSession(null);
+    setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
    }catch(err){if(alive)setLoadError(err instanceof Error?err.message:"Çalışma verilerin buluttan yüklenemedi.");}
   }
   void load();
@@ -81,28 +104,70 @@ function Dashboard({user}:{user:User}){
  },[user.id]);
  useEffect(()=>{
   if(!hydrated||!supabase)return;
-  const client=supabase,payload={version:1,progress,session:session?.step==="result"?null:session};
+  const client=supabase;
+  const snapshot={version:2,progress,drafts:combinedDrafts(drafts,session),session:null};
+  const revision=++saveRevision.current;
+  const savedAt=Date.now();
+  // Immediate on-device crash recovery: no manual save action needed.
+  try{localStorage.setItem(localCacheKey,JSON.stringify({pending:true,savedAt,payload:snapshot}));}catch{}
   setSyncStatus("saving");
   const timer=setTimeout(()=>{
     saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{
-      const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+      const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload:snapshot,updated_at:new Date().toISOString()},{onConflict:"user_id"});
       if(error)throw error;
     });
-    void saveQueue.current.then(()=>{setSyncStatus("saved");setSyncError("");}).catch(err=>setSyncError(err instanceof Error?err.message:"Buluta kaydedilemedi."));
-  },400);
+    void saveQueue.current.then(()=>{
+      if(revision!==saveRevision.current)return;
+      setSyncStatus("saved");setSyncError("");
+      try{localStorage.setItem(localCacheKey,JSON.stringify({pending:false,savedAt,payload:snapshot}));}catch{}
+    }).catch(err=>{
+      if(revision===saveRevision.current)setSyncError(err instanceof Error?err.message:"Buluta kaydedilemedi.");
+    });
+  },250);
   return()=>clearTimeout(timer);
- },[progress,session,hydrated,user.id,retrySave]);
+ },[progress,drafts,session,hydrated,user.id,retrySave,localCacheKey]);
+ // When the app is backgrounded, try an immediate cloud write as well.
+ // The local pending copy remains available if the mobile OS terminates the tab.
+ useEffect(()=>{
+  if(!hydrated||!supabase)return;
+  const client=supabase;
+  let lastFlush=0;
+  const flush=()=>{
+   const time=Date.now();
+   if(time-lastFlush<250)return;
+   lastFlush=time;
+   const revision=++saveRevision.current;
+   const payload={version:2,progress,drafts:combinedDrafts(drafts,session,time),session:null};
+   try{localStorage.setItem(localCacheKey,JSON.stringify({pending:true,savedAt:time,payload}));}catch{}
+   saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{
+    const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+    if(error)throw error;
+   });
+   void saveQueue.current.then(()=>{
+    if(revision!==saveRevision.current)return;
+    setSyncError("");setSyncStatus("saved");
+    try{localStorage.setItem(localCacheKey,JSON.stringify({pending:false,savedAt:time,payload}));}catch{}
+   }).catch(err=>{if(revision===saveRevision.current)setSyncError(err instanceof Error?err.message:"Bulut bağlantısında kayıt hatası.");});
+  };
+  const onVisibility=()=>{if(document.visibilityState==="hidden")flush();};
+  document.addEventListener("visibilitychange",onVisibility);
+  window.addEventListener("pagehide",flush);
+  return()=>{document.removeEventListener("visibilitychange",onVisibility);window.removeEventListener("pagehide",flush);};
+ },[progress,drafts,session,hydrated,user.id,localCacheKey]);
  async function logout(){
   if(!supabase)return;
   await saveQueue.current.catch(()=>undefined);
-  const {error}=await supabase.from(PROGRESS_TABLE).upsert({user_id:user.id,payload:{version:1,progress,session:session?.step==="result"?null:session},updated_at:new Date().toISOString()},{onConflict:"user_id"});
+  const payload={version:2,progress,drafts:combinedDrafts(drafts,session),session:null};
+  const {error}=await supabase.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
   if(error){setSyncError("Çıkış öncesi kayıt başarısız: "+error.message);return;}
+  try{localStorage.setItem(localCacheKey,JSON.stringify({pending:false,savedAt:Date.now(),payload}));}catch{}
   await supabase.auth.signOut();
  }
  useEffect(()=>{const timer=setInterval(()=>{setNow(Date.now());setToday(dateKey())},1000);return()=>clearInterval(timer)},[]);
  const day=selectedDate(today);
  const plan=useMemo(()=>dailyPlan(day,progress),[day,progress]);
  const makeups=useMemo(()=>missedBlocks(today,progress),[today,progress]);
+ const pendingDrafts=Object.entries(drafts).sort((a,b)=>(b[1].pausedAt||b[1].startedAt)-(a[1].pausedAt||a[1].startedAt));
  const weak=useMemo(()=>weakTopics(progress),[progress]);
  const due=useMemo(()=>dueTopics(progress),[progress]);
  const current=plan.find(b=>!progress.finished[b.id])||plan[0];
@@ -121,27 +186,57 @@ function Dashboard({user}:{user:User}){
  const timeLeft=Math.max(0,examTimeLimit-elapsed);
  const questionTotal=session?.questions.length||0;
  const answered=session?Object.keys(session.selected).length:0;
- function pauseLesson(){setSession(s=>s?{...s,pausedAt:Date.now()}:s);setSessionHidden(true);}
- function resumeLesson(){
-  setSession(s=>s?{...s,startedAt:s.startedAt+(s.pausedAt?Date.now()-s.pausedAt:0),questionStartedAt:s.questionStartedAt+(s.pausedAt?Date.now()-s.pausedAt:0),pausedAt:undefined}:s);
-  setSessionHidden(false);setPage("home");
+ function parkCurrent(nextPage:Page="home"){
+  if(session&&session.step!=="result"){
+   const saved=freezeDraft(session);
+   setDrafts(prev=>({...prev,[draftKey(saved)]:saved}));
+  }
+  setSession(null);setExamReport(null);setPage(nextPage);
  }
- function okayToReplaceSession(){return !session||session.step==="result"||window.confirm("Yarım kalan bir oturumun var. Yeni bir oturum başlatırsan mevcut yarım oturumun kaydı silinecek. Devam edilsin mi?");}
- function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
-  if(!okayToReplaceSession())return;
-  setSessionHidden(false);
-  const n=progress.answers.filter(a=>a.topicId===topic.id).length;
-  setSession({questions:makeQuiz(topic,mode==="tekrar"?15:12,n),step:"learn",index:0,selected:{},mode,topicId:topic.id,blockId:block?.id,startedAt:Date.now(),questionStartedAt:Date.now()});
+ function pauseLesson(){parkCurrent("home");}
+ function openDraft(key:string){
+  const existing=drafts[key];
+  if(!existing)return;
+  if(session&&session.step!=="result"&&draftKey(session)!==key){
+   const parked=freezeDraft(session);
+   setDrafts(prev=>{
+    const updated={...prev,[draftKey(parked)]:parked};
+    delete updated[key];return updated;
+   });
+  }else{
+   setDrafts(prev=>{const updated={...prev};delete updated[key];return updated;});
+  }
+  setSession(resumeDraft(existing));setExamReport(null);setPage("home");
+ }
+ function launchSession(next:Session){
+  const key=draftKey(next);
+  // Switching between lessons/assessments never destroys another unfinished session.
+  if(session&&session.step!=="result"){
+   if(draftKey(session)===key){setPage("home");return;}
+   const parked=freezeDraft(session);
+   setDrafts(prev=>{
+    const updated={...prev,[draftKey(parked)]:parked};
+    if(drafts[key])delete updated[key];
+    return updated;
+   });
+  }else if(drafts[key]){
+   setDrafts(prev=>{const updated={...prev};delete updated[key];return updated;});
+  }
+  const existing=drafts[key];
+  setSession(existing?resumeDraft(existing):next);
   setExamReport(null);setPage("home");
+ }
+ function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
+  const n=progress.answers.filter(a=>a.topicId===topic.id).length;
+  launchSession({questions:makeQuiz(topic,mode==="tekrar"?15:12,n),step:"learn",index:0,selected:{},mode,topicId:topic.id,blockId:block?.id,startedAt:Date.now(),questionStartedAt:Date.now()});
  }
  function startExam(track:"Mini"|"TYT"|"AYT",block?:StudyBlock){
-  if(!okayToReplaceSession())return;
-  setSessionHidden(false);
   const seed=progress.exams.length+1;
-  setSession({questions:makeExam(track,seed),step:"quiz",index:0,selected:{},mode:"deneme",blockId:block?.id,examType:track,startedAt:Date.now(),questionStartedAt:Date.now()});
-  setExamReport(null);setPage("home");
+  launchSession({questions:makeExam(track,seed),step:"quiz",index:0,selected:{},mode:"deneme",blockId:block?.id,examType:track,startedAt:Date.now(),questionStartedAt:Date.now()});
  }
- function startPlacement(){if(!okayToReplaceSession())return;setSessionHidden(false);setSession({questions:PLACEMENT,step:"quiz",index:0,selected:{},mode:"deneme",examType:"Seviye",startedAt:Date.now(),questionStartedAt:Date.now()});setExamReport(null);setPage("home");}
+ function startPlacement(){
+  launchSession({questions:PLACEMENT,step:"quiz",index:0,selected:{},mode:"deneme",examType:"Seviye",startedAt:Date.now(),questionStartedAt:Date.now()});
+ }
  function startBlock(block:StudyBlock){
   if(block.type==="deneme"){startExam("Mini",block);return;}
   const t=getTopic(block.topicId||"");if(t)startTopic(t,block,block.type==="tekrar"?"tekrar":"ders");
@@ -155,6 +250,7 @@ function Dashboard({user}:{user:User}){
   const date=dateKey();
   const assessment=s.examType==="Seviye"?calculatePlacement(s.selected):null;
   setProgress(prev=>({...prev,answers:[...prev.answers,...records],exams:s.examType?[...prev.exams,{id:crypto.randomUUID(),track:s.examType,at:new Date().toISOString(),correct,incorrect,empty,net:report.net,seconds:Math.floor((Date.now()-s.startedAt)/1000)}]:prev.exams,minutes:{...prev.minutes,[date]:(prev.minutes[date]||0)+minutes},finished:s.blockId?{...prev.finished,[s.blockId]:new Date().toISOString()}:prev.finished,activeTopicId:s.topicId,placement:assessment?{completedAt:new Date().toISOString(),correct:assessment.correct,incorrect:assessment.incorrect,empty:assessment.empty,area:assessment.area}:prev.placement}));
+  setDrafts(prev=>{const next={...prev};delete next[draftKey(s)];return next;});
   setSession({...s,step:"result"});
  }
  useEffect(()=>{if(session?.step==="quiz"&&session.examType&&timeLeft===0)finish(session);/* time triggered, do not restart timer */},[session?.step,session?.examType,timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -163,9 +259,9 @@ function Dashboard({user}:{user:User}){
   if(!session)return;
   if(session.index+1===session.questions.length){finish(session)}else setSession({...session,index:session.index+1,questionStartedAt:Date.now()});
  }
- function nav(next:Page){setPage(next);setNotice("");}
+ function nav(next:Page){if(session)parkCurrent(next);else setPage(next);setNotice("");}
  function resetData(){
-  if(window.confirm("Tüm kişisel ilerleme ve denemeler bu tarayıcıdan silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setSession(null);setSessionHidden(false);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
+  if(window.confirm("Tüm hesap ilerlemen, yarım derslerin ve denemelerin silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setDrafts({});setSession(null);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
  }
  function exportData(){
   const payload=JSON.stringify({version:1,exportedAt:new Date().toISOString(),progress},null,2);
@@ -177,29 +273,29 @@ function Dashboard({user}:{user:User}){
   const f=event.target.files?.[0];if(!f)return;
   try{const obj=JSON.parse(await f.text());if(!obj.progress||!Array.isArray(obj.progress.answers))throw Error("Geçersiz dosya");
    if(!window.confirm("Yedekteki ilerleme mevcut kayıtların yerine geçecek. Devam edilsin mi?"))return;
-   setProgress(safeState(obj.progress));setSession(null);setSessionHidden(false);setNotice("Yedek başarıyla yüklendi.");
+   setProgress(safeState(obj.progress));setDrafts({});setSession(null);setNotice("Yedek başarıyla yüklendi.");
   }catch{setNotice("Yedek dosyası geçersiz.")}
   event.target.value="";
  }
  const statsByCourse=COURSES.map(c=>{const ids=topicsByCourse(c.id).map(t=>t.id);const answers=progress.answers.filter(a=>ids.includes(a.topicId));return {...c,count:ids.length,attempted:new Set(answers.map(a=>a.topicId)).size,percent:answers.length?Math.round(answers.filter(a=>a.correct).length/answers.length*100):0}});
  const filtered=topicsByCourse(course).filter(t=>t.title.toLocaleLowerCase("tr-TR").includes(search.toLocaleLowerCase("tr-TR")));
- const menus:{id:Page;text:string;icon:string}[]=[{id:"home",text:"Bugün",icon:"home"},{id:"subjects",text:"Konu Kütüphanesi",icon:"book"},{id:"calendar",text:"8 Aylık Takvim",icon:"calendar"},{id:"exams",text:"Deneme Merkezi",icon:"award"},{id:"analytics",text:"Analizlerim",icon:"chart"},{id:"settings",text:"Ayarlar & Yedek",icon:"settings"}];
+ const menus:{id:Page;text:string;icon:string}[]=[{id:"home",text:"Bugün",icon:"home"},{id:"tasks",text:"Bakman Gerekenler",icon:"check"},{id:"subjects",text:"Konu Kütüphanesi",icon:"book"},{id:"calendar",text:"8 Aylık Takvim",icon:"calendar"},{id:"exams",text:"Deneme Merkezi",icon:"award"},{id:"analytics",text:"Analizlerim",icon:"chart"},{id:"settings",text:"Ayarlar & Yedek",icon:"settings"}];
  return <div className="layout">
   <aside className="sidebar">
    <div className="brand"><div className="brand-mark">Y<span>+</span></div><div><strong>YKS Akademi</strong><small>2027 KİŞİSEL KOÇ</small></div></div>
    <div className="goal-card"><span className="tiny-label">HEDEFİN</span><strong>Akdeniz Üniversitesi</strong><span>Psikoloji · Eşit Ağırlık</span><div className="goal-line"><b>İlk 35.000</b><span>2027 YKS</span></div></div>
    <span className="nav-caption">ÇALIŞMA ALANI</span>
-   <nav className="side-nav">{menus.map(m=><button key={m.id} onClick={()=>nav(m.id)} className={page===m.id?"active":""}><MiniIcon name={m.icon}/><span>{m.text}</span>{m.id==="analytics"&&weak.length>0?<em>{weak.length}</em>:null}</button>)}</nav>
+   <nav className="side-nav">{menus.map(m=><button key={m.id} onClick={()=>nav(m.id)} className={page===m.id?"active":""}><MiniIcon name={m.icon}/><span>{m.text}</span>{m.id==="tasks"&&(pendingDrafts.length+weak.length+makeups.length)>0?<em>{pendingDrafts.length+weak.length+makeups.length}</em>:m.id==="analytics"&&weak.length>0?<em>{weak.length}</em>:null}</button>)}</nav>
    <div className="side-bottom"><div className="mini-avatar">Y</div><div><strong>YKS Yolculuğun</strong><small>{currentWeek(day)}. hafta · Günde 3 saat</small></div></div>
   </aside>
   <main className="main">
-   <header className="topbar"><div className="topbar-title"><span className="eyebrow">2027 YKS HAZIRLIK PLATFORMU</span><h1>{session?"Çalışma oturumu":page==="home"?"Bugün seni neler bekliyor?":page==="subjects"?"Konu kütüphanesi":page==="calendar"?"8 aylık çalışma planın":page==="exams"?"Deneme merkezi":page==="analytics"?"Performans analizi":"Ayarlar ve yedekleme"}</h1><p>{session?"Konu anlatımı, çözümlü sorular ve kişisel öğrenme analizi.":page==="home"?"Her gün 3 saat. Her hafta yeni bir adım.":"Hedefin için hazırlanan çalışma sistemin."}</p></div><div className="header-actions"><span className="date-chip"><MiniIcon name="calendar"/>{prettyDate(today)}</span><span className="target-chip">EA · 2027</span><span className="account-chip" title={user.email}>{user.email}</span></div></header>
-   {loadError?<div className="panel load-error"><h2>Çalışma kayıtların yüklenemedi</h2><p>{loadError}</p><p>Supabase bağlantısını ve <code>study_progress</code> tablosunun güvenlik kurallarını kontrol et. Veriler kaybolmasın diye çalışma ekranını açmıyoruz.</p><button className="btn primary" onClick={()=>window.location.reload()}>Tekrar dene</button></div>:!hydrated?<div className="panel empty">Çalışma verilerin buluttan yükleniyor…</div>:session&&!sessionHidden? <section className="session-wrap">
-    <div className="session-bar"><button className="back-link" onClick={pauseLesson}><MiniIcon name="back"/> Kaydet ve ara ver</button><div className="session-meta"><span><MiniIcon name="clock"/>{session.examType?formatDuration(timeLeft)+" kaldı":formatDuration(elapsed)}</span><b>{session.step==="learn"?"Konu anlatımı":session.step==="result"?"Tamamlandı":(session.index+1)+"/"+questionTotal+" soru"}</b></div></div>
+   <header className="topbar"><div className="topbar-title"><span className="eyebrow">2027 YKS HAZIRLIK PLATFORMU</span><h1>{session?"Çalışma oturumu":page==="home"?"Bugün seni neler bekliyor?":page==="tasks"?"Bakman gerekenler":page==="subjects"?"Konu kütüphanesi":page==="calendar"?"8 aylık çalışma planın":page==="exams"?"Deneme merkezi":page==="analytics"?"Performans analizi":"Ayarlar ve yedekleme"}</h1><p>{session?"Konu anlatımı, çözümlü sorular ve kişisel öğrenme analizi.":page==="home"?"Her gün 3 saat. Her hafta yeni bir adım.":"Hedefin için hazırlanan çalışma sistemin."}</p></div><div className="header-actions"><span className="date-chip"><MiniIcon name="calendar"/>{prettyDate(today)}</span><span className="target-chip">EA · 2027</span><span className={"academy-sync "+(syncError?"failed":syncStatus)} title={syncError||"Çalışmaların otomatik kaydediliyor"}>{syncError?"Kayıt hatası":syncStatus==="saved"?"Kaydedildi":syncStatus==="saving"?"Kaydediliyor…":"Yükleniyor…"}</span><span className="account-chip" title={user.email}>{user.email}</span></div></header>
+   {loadError?<div className="panel load-error"><h2>Çalışma kayıtların yüklenemedi</h2><p>{loadError}</p><p>Supabase bağlantısını ve <code>study_progress</code> tablosunun güvenlik kurallarını kontrol et. Veriler kaybolmasın diye çalışma ekranını açmıyoruz.</p><button className="btn primary" onClick={()=>window.location.reload()}>Tekrar dene</button></div>:!hydrated?<div className="panel empty">Çalışma verilerin buluttan yükleniyor…</div>:session? <section className="session-wrap">
+    <div className="session-bar"><button className="back-link" onClick={pauseLesson}><MiniIcon name="back"/> Panele dön</button><div className="session-meta"><span className="academy-session-auto"><MiniIcon name="check"/> Otomatik kayıt</span><span><MiniIcon name="clock"/>{session.examType?formatDuration(timeLeft)+" kaldı":formatDuration(elapsed)}</span><b>{session.step==="learn"?"Konu anlatımı":session.step==="result"?"Tamamlandı":(session.index+1)+"/"+questionTotal+" soru"}</b></div></div>
     {session.step==="learn"&&activeTopic?<div className="lesson-layout">
       <article className="panel lesson-panel"><div className="subject-tag">{getCourse(activeTopic.courseId).label}</div><h2>{activeTopic.title}</h2><p className="intro">{activeTopic.summary}</p><h3>Konunun temel kuralları</h3><div className="lesson-principles">{activeTopic.principles.map((line,i)=><div key={i} className="principle"><span>{i+1}</span><p>{line}</p></div>)}</div>
      {expanded?<div className="deep-lesson"><div className="deep-head"><span className="eyebrow">AYRINTILI DERS NOTU</span><h3>Bu derste kazanacakların</h3><ul>{expanded.outcomes.map((x,i)=><li key={i}>{x}</li>)}</ul>{session.lessonSection!==undefined?<div className="lesson-resume-notice">Ders ilerlemen: {Math.min(session.lessonSection,expanded.sections.length)} / {expanded.sections.length} bölüm. {session.lessonSection<expanded.sections.length?<a href={"#ders-bolumu-"+session.lessonSection}>Kaldığın bölüme git</a>:"Anlatımı tamamladın; teste geçebilirsin."}</div>:null}</div>
-      {expanded.sections.map((part,i)=><section className="deep-section" id={"ders-bolumu-"+i} key={i}><span className="deep-index">BÖLÜM {i+1} · {(session.lessonSection??0)>i?"TAMAMLANDI":(session.lessonSection??0)===i?"SIRADAKİ":"BEKLİYOR"}</span><h3>{part.title}</h3><p>{part.explanation}</p>{part.formula?<div className="deep-formula">{part.formula}</div>:null}<div className="deep-example"><b>Örnek: {part.example.question}</b><ol>{part.example.steps.map((step,j)=><li key={j}>{step}</li>)}</ol><strong>Cevap: {part.example.answer}</strong></div><div className="deep-mistake"><strong>Sık yapılan hata</strong><p>{part.mistake}</p></div><button className="btn outline chapter-check" onClick={()=>setSession(s=>s?{...s,lessonSection:Math.max(s.lessonSection??0,i+1)}:s)} disabled={(session.lessonSection??0)>i}>{(session.lessonSection??0)>i?"Bölüm tamamlandı":"Bu bölümü okudum"}</button></section>)}
+      {expanded.sections.map((part,i)=><section className="deep-section" id={"ders-bolumu-"+i} key={i}><span className="deep-index">BÖLÜM {i+1} · {(session.lessonSection??0)>i?"TAMAMLANDI":(session.lessonSection??0)===i?"SIRADAKİ":"BEKLİYOR"}</span><h3>{part.title}</h3><p>{part.explanation}</p>{part.formula?<div className="deep-formula">{part.formula}</div>:null}<div className="deep-example"><b>Örnek: {part.example.question}</b><ol>{part.example.steps.map((step,j)=><li key={j}>{step}</li>)}</ol><strong>Cevap: {part.example.answer}</strong></div><div className="deep-mistake"><strong>Sık yapılan hata</strong><p>{part.mistake}</p></div><button className="btn outline chapter-check" onClick={()=>setSession(s=>s?{...s,lessonSection:Math.max(s.lessonSection??0,i+1)}:s)} disabled={(session.lessonSection??0)>i}>{(session.lessonSection??0)>i?"Bölüm tamamlandı":"Bölümü bitirdim"}</button></section>)}
       <div className="deep-recap"><h3>Öğrendiklerini kontrol et</h3><ul>{expanded.recap.map((x,i)=><li key={i}>{x}</li>)}</ul><p><b>Ev çalışması:</b> {expanded.practicePlan}</p></div>
      </div>:<div className="info-banner">Bu konu için ayrıntılı ders modülü henüz geliştirilmedi. Şu an temel özet ve örnek sunuluyor; kapsamlı ders içeriği tamamlanıncaya kadar bunu tek başına yeterli kaynak olarak kullanma.</div>}
      <h3>Adım adım çözümlü örnek</h3><div className="example"><strong>{activeTopic.worked}</strong><div className="example-solution"><span>ÇÖZÜM</span><p>{activeTopic.solution}</p></div></div><h3>Sınavda dikkat edilecekler</h3><p>Önce sorunun ne istediğini belirle. Tanımı ezberlemek yerine verilenleri adım adım kullan. İşlem ve yorum hatası yaparsan hatanın hangi basamakta başladığını not al. Çözümü tekrar kapatıp kendin yap.</p><div className="lesson-actions"><button className="btn ghost" onClick={()=>window.print()}>Yazdır / PDF kaydet</button><button className="btn primary" onClick={()=>setSession(s=>s?{...s,step:"quiz",questionStartedAt:Date.now()}:s)}><MiniIcon name="play"/> Teste geç · {session.questions.length} soru</button></div></article>
@@ -214,12 +310,37 @@ function Dashboard({user}:{user:User}){
      <section className="welcome"><div><span className="eyebrow light">KİŞİSEL ÇALIŞMA PLANI</span><h2>Hedefin belli.<br/>Bugün bir adım daha ilerle.</h2><p>Akdeniz Üniversitesi Psikoloji için TYT ve AYT eşit ağırlık hazırlığın. Öğrendikçe güçlenen bir program.</p><button className="btn white" onClick={()=>{if(current)startBlock(current);else nav("subjects")}}><MiniIcon name="play"/>{current?"Çalışmaya başla":"Konu seç ve başla"} <MiniIcon name="arrow"/></button></div><div className="hero-orbit"><div className="orb"><strong>2027</strong><span>YKS</span></div><span className="orbit-ring first"/><span className="orbit-ring second"/></div></section>
      {!progress.placement?<div className="placement-banner"><div><span className="eyebrow">DERSHANEYE BAŞLANGIÇ · SEVİYE TESPİTİ</span><h2>Önce hangi konuları bildiğini ölçelim.</h2><p>36 özgün soru · {PLACEMENT_TIME_MINUTES} dakika · TYT Matematik ve Türkçe, AYT Matematik ve Edebiyat. Sonuçlarına göre eksiklerini belirleyip tekrar önceliğini ayarlayacağız.</p></div><button className="btn primary" onClick={startPlacement}>Seviye sınavına başla <MiniIcon name="arrow"/></button></div>:<div className="placement-done"><MiniIcon name="check"/><span>Seviye tespiti tamamlandı: {progress.placement.correct}/36 doğru.</span><button onClick={()=>nav("analytics")}>Sonuçları gör <MiniIcon name="arrow"/></button></div>}
      {today<START_DATE?<div className="info-banner">Programın ilk günü 19 Ekim Pazartesi. İstersen ilk dersi şimdiden başlatabilirsin.</div>:null}
-     {session&&sessionHidden?<div className="academy-pause-banner"><div><span className="eyebrow">YARIM KALAN OTURUM</span><h2>{session.examType?session.examType+" sınavı":getTopic(session.topicId||"")?.title||"Ders"} · {session.step==="learn"?"Konu anlatımı":session.index+1+". soru"}</h2><p>{session.step==="learn"&&session.lessonSection!==undefined?"Son işaretlediğin alt ders: "+session.lessonSection+". bölüm. ":""}İlerlemen hesabına kaydediliyor; kaldığın yerden devam edebilirsin.</p></div><div className="academy-pause-actions"><button className="btn primary" onClick={resumeLesson}>Kaldığım yerden devam et</button><button className="btn ghost" onClick={()=>{if(window.confirm("Yarım kalan oturumu silmek istediğine emin misin?")){setSession(null);setSessionHidden(false)}}}>Oturumu bırak</button></div></div>:null}
+     <section className="academy-action-grid">
+      <div className="panel academy-task-panel">
+       <div className="section-heading"><div><span className="eyebrow">OTOMATİK KAYIT</span><h2>Yarım kalanların</h2><p>Bir dersten diğerine geçebilirsin. Hiçbiri silinmez.</p></div><span className="academy-count">{pendingDrafts.length}</span></div>
+       {pendingDrafts.length?pendingDrafts.slice(0,3).map(([key,s])=><div className="academy-task-row" key={key}><div><strong>{s.examType?s.examType+" sınavı":getTopic(s.topicId||"")?.title||"Ders"}</strong><small>{sessionDescription(s)}</small></div><button className="small-btn" onClick={()=>openDraft(key)}>Devam et</button></div>):<p className="academy-task-empty">Yarım kalan oturum yok. Yeni derse başlayabilirsin.</p>}
+       {pendingDrafts.length>3?<button className="text-link" onClick={()=>nav("tasks")}>Diğer {pendingDrafts.length-3} oturumu gör <MiniIcon name="arrow"/></button>:null}
+      </div>
+      <div className="panel academy-task-panel">
+       <div className="section-heading"><div><span className="eyebrow">ÖĞRENME KOÇUN</span><h2>Bakman gerekenler</h2><p>Seviye sınavı ve çözdüğün sorulardan belirlenen öncelikler.</p></div><span className="academy-count">{weak.length}</span></div>
+       {weak.length?weak.slice(0,3).map(t=><div className="academy-task-row" key={t.id}><div><strong>{t.title}</strong><small>{getCourse(t.courseId).label} · {topicStats(progress,t.id).needsValidation?"Seviye tespiti yanlışını kontrol et":"Başarı %"+topicStats(progress,t.id).accuracy}</small></div><button className="small-btn" onClick={()=>startTopic(t,undefined,"tekrar")}>Pekiştir</button></div>):<p className="academy-task-empty">Şimdilik öncelikli eksik yok. Test çözdükçe burada görünür.</p>}
+       <button className="text-link" onClick={()=>nav("tasks")}>Tüm yapılacakları aç <MiniIcon name="arrow"/></button>
+      </div>
+     </section>
      {makeups.length?<div className="academy-makeup"><div className="section-heading"><div><span className="eyebrow">DERSHANE TELAFİ MERKEZİ</span><h2>Bekleyen {makeups.length} dersin var</h2><p>Dünün veya daha eski günlerin tamamlanmayan dersleri silinmez. Bugünkü program ayrı kalır; uygun olduğunda telafileri tamamlayabilirsin.</p></div></div><div className="academy-makeup-list">{(showAllMakeups?makeups:makeups.slice(0,5)).map(b=><div className="academy-makeup-row" key={b.id}><div><small>{prettyDate(b.id.slice(0,10))} · {b.type==="deneme"?"Deneme":b.type==="tekrar"?"Tekrar":"Ders"}</small><strong>{b.title}</strong></div><button className="small-btn" onClick={()=>startBlock(b)}>Telafi et</button></div>)}</div>{makeups.length>5?<button className="text-link academy-more" onClick={()=>setShowAllMakeups(v=>!v)}>{showAllMakeups?"Listeyi daralt":(makeups.length-5)+" dersi daha göster"} <MiniIcon name="arrow"/></button>:null}</div>:null}
      <section className="metric-grid"><div className="metric"><span>TOPLAM ÇÖZÜLEN</span><strong>{answeredCount}</strong><small>soru</small></div><div className="metric"><span>DOĞRULUK ORANI</span><strong>%{accuracy}</strong><small>tüm testler</small></div><div className="metric"><span>ÇALIŞMA SÜRESİ</span><strong>{Math.floor(studyMinutes/60)}<i>sa</i> {studyMinutes%60}<i>dk</i></strong><small>kaydedilen süre</small></div><div className="metric"><span>ÇALIŞILAN KONU</span><strong>{solvedTopics}</strong><small>/ {TOPICS.length} konu</small></div></section>
      <section className="dashboard-grid"><div className="panel today-panel"><div className="section-heading"><div><span className="eyebrow">GÜNLÜK PROGRAM</span><h2>{prettyDate(day)}</h2></div><span className="time-pill">180 dk · 4 oturum</span></div><div className="daily-progress"><div><b>Bugünkü ilerleme</b><span>{Math.min(dayMinutes,maxDaily)} / 180 dk</span></div><div className="progress-rail"><div style={{width:Math.min(100,dayMinutes/maxDaily*100)+"%"}}/></div></div>{plan.length? <div className="block-list">{plan.map((b,i)=>{const done=!!progress.finished[b.id];const crs=b.courseId==="mock"?undefined:b.courseId==="review"?undefined:getCourse(b.courseId);return <div key={b.id} className={"study-row "+(done?"done":"")}><div className="row-time">{String(i+1).padStart(2,"0")}</div><div className="row-main"><span className="topic-type" style={{color:crs?.color||"#7285a0"}}>{b.type==="tekrar"?"TEKRAR":b.type==="deneme"?"DENEME":crs?.label.toLocaleUpperCase("tr-TR")}</span><h3>{b.title}</h3><span className="muted">{lessonClock(progress.startTime,i)?lessonClock(progress.startTime,i)+" · ":"45 dakika · "}{b.type==="deneme"?"30 soru":b.type==="tekrar"?"15 soru":"12 soru"}</span></div><button disabled={done} className={"row-btn "+(done?"is-done":"")} onClick={()=>startBlock(b)}>{done?<MiniIcon name="check"/>:<MiniIcon name="arrow"/>}</button></div>})}</div>:<div className="empty">Pazar günü dinlenme ve hafif tekrar günü. İstersen kütüphaneden konu seçebilirsin.</div>}</div><div className="side-stack"><div className="panel focus"><span className="eyebrow">BU HAFTAKİ DURUM</span><h2>{currentWeek(day)}. hafta</h2><div className="focus-large">{35-currentWeek(day)}<small> hafta kalan (yaklaşık)</small></div><p>2027 YKS sınav tarihi açıklandığında takvimi resmî tarihe göre ayarla.</p><button className="text-link" onClick={()=>nav("calendar")}>Takvimi incele <MiniIcon name="arrow"/></button></div><div className="panel focus"><span className="eyebrow">AKILLI TEKRAR</span><h2>Eksiklerin takipte</h2>{weak.length?<><p>{weak.length} konuda pekiştirme öneriliyor. En düşük başarıdan başlayalım.</p><button className="btn outline" onClick={()=>startTopic(weak[0],undefined,"tekrar")}>Tekrara başla</button></>:<p>Henüz düşük başarı tespit edilmedi. Testler çözdükçe tekrar listesi oluşacak.</p>}</div></div></section>
      <div className="below-note"><MiniIcon name="book"/> <b>{TOPICS.length} konu</b> katalogda, <b>{DETAILED_LESSON_COUNT} konuda</b> ayrıntılı ders modülü hazır. Kalan konular özet düzeyindedir. Resmî ÖSYM soruları değildir.</div>
     </>}
+    {page==="tasks"&&<div className="academy-todo-page">
+      <section className="panel academy-task-panel"><div className="section-heading"><div><span className="eyebrow">1 · DEVAM ET</span><h2>Yarım kalan dersler ve sınavlar</h2><p>İlerleme otomatik kaydedilir. Yeni bir derse geçmek buradaki kayıtları silmez.</p></div><span className="academy-count">{pendingDrafts.length}</span></div>
+        {pendingDrafts.length?pendingDrafts.map(([key,s])=><div className="academy-task-row" key={key}><div><strong>{s.examType?s.examType+" sınavı":getTopic(s.topicId||"")?.title||"Ders"}</strong><small>{sessionDescription(s)} · Son kayıt: {new Date(s.pausedAt||s.startedAt).toLocaleString("tr-TR")}</small></div><button className="small-btn" onClick={()=>openDraft(key)}>Devam et</button></div>):<p className="academy-task-empty">Yarım kalan oturumun yok.</p>}
+      </section>
+      <section className="panel academy-task-panel"><div className="section-heading"><div><span className="eyebrow">2 · EKSİKLERİ KAPAT</span><h2>Tekrar ve pekiştirme konuların</h2><p>Seviye tespiti ve konu testlerinde zorlandığın alanlar. Öğrendikçe bu liste güncellenir.</p></div><span className="academy-count">{weak.length}</span></div>
+       {progress.placement?<p className="academy-placement-note">Seviye tespitin kaydedildi: <strong>{progress.placement.correct} doğru / {progress.placement.incorrect} yanlış / {progress.placement.empty} boş.</strong></p>:<p className="academy-placement-note">Seviye tespiti henüz tamamlanmadı. <button className="text-link" onClick={startPlacement}>Başla <MiniIcon name="arrow"/></button></p>}
+       {weak.length?(showAllAttention?weak:weak.slice(0,12)).map(t=><div className="academy-task-row" key={t.id}><div><strong>{t.title}</strong><small>{getCourse(t.courseId).label} · {topicStats(progress,t.id).needsValidation?"Öncelikli kontrol": "%"+topicStats(progress,t.id).accuracy+" doğru"}</small></div><button className="small-btn" onClick={()=>startTopic(t,undefined,"tekrar")}>Pekiştir</button></div>):<p className="academy-task-empty">Yeni bir eksik tespit edilmedi.</p>}
+       {weak.length>12?<button className="text-link" onClick={()=>setShowAllAttention(p=>!p)}>{showAllAttention?"Daha az göster":"Tüm "+weak.length+" konuyu göster"}</button>:null}
+      </section>
+      <section className="panel academy-task-panel"><div className="section-heading"><div><span className="eyebrow">3 · TELAFİ</span><h2>Önceki günlerden kalan dersler</h2><p>Dersler eski tarihlerine bağlı kalır, tamamlayana kadar listede görünür. Yeni günün dersleri silinmez.</p></div><span className="academy-count">{makeups.length}</span></div>
+       {makeups.length?(showAllMakeups?makeups:makeups.slice(0,10)).map(b=><div className="academy-task-row" key={b.id}><div><strong>{b.title}</strong><small>{prettyDate(b.id.slice(0,10))}</small></div><button className="small-btn" onClick={()=>startBlock(b)}>Telafi et</button></div>):<p className="academy-task-empty">Geçmiş günlerden bekleyen ders yok.</p>}
+       {makeups.length>10?<button className="text-link" onClick={()=>setShowAllMakeups(x=>!x)}>{showAllMakeups?"Listeyi daralt":"Tüm telafi derslerini göster"}</button>:null}
+      </section>
+     </div>}
     {page==="subjects"&&<div className="library-layout"><div className="panel subject-sidebar"><div className="eyebrow">DERSLER</div><div className="track-label">TYT</div>{statsByCourse.filter(c=>c.track==="TYT").map(c=><button key={c.id} className={"course-item "+(course===c.id?"active":"")} onClick={()=>{setCourse(c.id);setSearch("")}}><span className="course-dot" style={{background:c.color}}/><span>{c.label}</span><small>{c.count}</small></button>)}<div className="track-label">AYT</div>{statsByCourse.filter(c=>c.track==="AYT").map(c=><button key={c.id} className={"course-item "+(course===c.id?"active":"")} onClick={()=>{setCourse(c.id);setSearch("")}}><span className="course-dot" style={{background:c.color}}/><span>{c.label}</span><small>{c.count}</small></button>)}</div><div className="panel topics-panel"><div className="section-heading"><div><span className="eyebrow">KONU ANLATIMLARI VE TESTLER</span><h2>{getCourse(course).label}</h2><p>{filtered.length} konu · konu anlatımı, örnek çözüm ve test</p></div></div><label className="search-field"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Bu derste konu ara…"/></label><div className="topic-list">{filtered.map((t,i)=>{const s=topicStats(progress,t.id);return <div className="topic-row" key={t.id}><div className="topic-no">{String(t.index+1).padStart(2,"0")}</div><div className="topic-body"><strong>{t.title}</strong><span>{s.count?s.count+" soru çözüldü · %"+s.accuracy+" doğruluk":"Henüz çalışılmadı"}</span></div><div className={"topic-status "+(s.weak?"low":s.mastery>=72?"ok":"")}>{s.count?(s.weak?"Tekrar":s.mastery>=72?"İyi":"Gelişiyor"):"Yeni"}</div><button className="small-btn" onClick={()=>startTopic(t)}>Çalış <MiniIcon name="arrow"/></button></div>})}</div></div></div>}
     {page==="calendar"&&<div className="panel calendar-page"><div className="section-heading"><div><span className="eyebrow">19 EKİM 2026 – 20 HAZİRAN 2027</span><h2>35 haftalık hazırlık programı</h2><p>Haftada 6 gün, günde 4×45 dakika net çalışma. Çarşamba tekrar, cumartesi deneme.</p></div></div><div className="week-rule">{weekDays.map((d,i)=><div key={d}><b>{d}</b><span>{i===6?"Dinlenme":i===5?"Deneme + analiz":i===2?"Eksik pekiştirme":"Konu + test"}</span></div>)}</div><div className="week-grid">{monthPlan(progress).map(w=><div key={w.week} className={"week-box "+(w.week===currentWeek(day)?"current":"")}><span>HAFTA {String(w.week).padStart(2,"0")}</span><strong>{new Date(w.from+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"short"})}</strong><small>{w.week===currentWeek(day)?"Şu anki haftan":"4 günlük oturum / başlangıç günü"}</small></div>)}</div><div className="info-banner">Bu plan 2027 YKS takvimi kesinleşmediği için yaklaşık bitiş tarihiyle hazırlandı. Gerekirse son haftanın tarihi düzenlenmelidir.</div></div>}
     {page==="exams"&&<><div className="placement-banner"><div><span className="eyebrow">SEVİYE TESPİT SINAVI</span><h2>36 soru · {PLACEMENT_TIME_MINUTES} dakika</h2><p>Başlangıç seviyeni ve TYT/AYT derslerindeki öncelikli eksikleri belirleyen özgün sınav.</p></div><button className="btn primary" onClick={startPlacement}>{progress.placement?"Sınavı tekrar çöz":"Seviye sınavını başlat"} <MiniIcon name="arrow"/></button></div><div className="exam-grid">{[{type:"Mini" as const,title:"Haftalık mini deneme",count:30,time:"45 dakika",info:"TYT ve AYT konularından karışık, hızlı tarama."},{type:"TYT" as const,title:"TYT genel deneme",count:120,time:"165 dakika",info:"Türkçe 40, sosyal 20, matematik 40, fen 20 dağılımı."},{type:"AYT" as const,title:"AYT eşit ağırlık",count:80,time:"180 dakika",info:"Matematik 40, edebiyat 24, tarih-1 10, coğrafya-1 6."}].map(e=><div key={e.type} className="panel exam-card"><span className="eyebrow">{e.type==="Mini"?"KISA TARAMA":e.type+" GENEL DENEME"}</span><h2>{e.title}</h2><p>{e.info}</p><div className="exam-stats"><span><b>{e.count}</b> soru</span><span><b>{e.time}</b></span></div><button className="btn primary" onClick={()=>startExam(e.type)}>Denemeyi başlat <MiniIcon name="arrow"/></button></div>)}</div><div className="panel history-panel"><div className="section-heading"><h2>Deneme geçmişin</h2></div>{progress.exams.length?progress.exams.slice().reverse().map(e=><div className="history-row" key={e.id}><span>{e.track} · {new Date(e.at).toLocaleDateString("tr-TR")}</span><strong>{e.net} net</strong><small>{e.correct} D · {e.incorrect} Y · {e.empty} B</small></div>):<p className="muted">Henüz deneme çözmedin. İlk denemenden sonra sonuçlar burada saklanır.</p>}</div><div className="info-banner">Bu denemeler özgün alıştırma sorularından oluşturulmuştur. Resmî ÖSYM denemesi ya da gerçek sınav puanı hesaplayıcısı değildir.</div></>}

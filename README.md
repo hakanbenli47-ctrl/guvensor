@@ -26,7 +26,8 @@ Varsayılan adres: http://localhost:3000
 - Çözüm sonunda yanlış ve boş soruları açıklamalı inceleme, konu pekiştirmeye yönlendirme.
 - İsteğe bağlı günlük başlama saati; 4x45 dakikalık çalışma ve ara molaları.
 - **Telafi merkezi:** Bir önceki günden kalan plan oturumları yeni günün programından silinmez; tarihlerine göre telafi kuyruğunda listelenir ve tamamlanana kadar kalır. Telafi, günlük programa ek çalışmadır; program tarihlerini kendiliğinden ötelemez.
-- **Kaldığın yerden devam:** Anlatım bölümlerinde “Bu bölümü okudum”, oturumda “Kaydet ve ara ver” seçenekleri; cevap ve konu ilerlemesinin bulut kaydı ve bir sonraki girişte devam kartı. Birden fazla eşzamanlı yarım oturum desteklenmez: yeni oturum başlatma eski yarım oturum için onay ister.
+- **Birden fazla yarım oturum:** Her ders/tekrar/deneme kendi anahtarıyla `drafts` koleksiyonuna otomatik kaydedilir. Panele dönmek veya başka derse başlamak önceki çalışmayı silmez; “Bakman Gerekenler” ve “Yarım Kalanların” alanından devam edilir. Bölüm ilerlemesi ve cevaplanan sorular saklanır.
+- **Otomatik bulut ve cihaz kaydı:** Değişikliklerden sonra yaklaşık 250 ms gecikmeyle buluta yazılır, cihazda anlık kurtarma kopyası tutulur, uygulama arka plana geçtiğinde yeniden gönderme denenir. Aynı anda iki cihazda düzenleme hâlâ son yazan kazanır.
 - Mobil uyumlu panel ve PDF olarak yazdırılabilir konu anlatımı.
 
 ## İçerik güvenilirliği ve sınırlar

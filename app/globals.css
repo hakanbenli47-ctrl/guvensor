@@ -133,3 +133,31 @@
 .chapter-check{margin-top:16px}.chapter-check:disabled{opacity:.6;cursor:default}
 @media(max-width:750px){.academy-pause-banner{flex-direction:column;align-items:stretch}.academy-pause-actions{flex-direction:column}.academy-pause-actions .btn{width:100%}}
 @media(max-width:420px){.academy-makeup-row{align-items:flex-start}.academy-makeup-row strong{line-height:1.5}.academy-makeup-row button{flex-shrink:0}}
+
+/* Otomatik kayıt, çoklu yarım oturum ve öğrenme koçu */
+.academy-action-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:20px 0}
+.academy-task-panel{min-width:0;padding:22px 24px}
+.academy-task-panel .section-heading{align-items:center;margin:0 0 16px}
+.academy-task-panel .section-heading h2{font-size:18px;letter-spacing:-.4px;margin:4px 0 6px}
+.academy-task-panel .section-heading p{font-size:11px;color:#7d8a9c;max-width:530px;line-height:1.65;margin:0}
+.academy-count{display:flex;align-items:center;justify-content:center;min-width:34px;height:34px;border-radius:10px;background:#eff0ff;color:#515bba;font-size:15px;font-weight:900}
+.academy-task-row{display:flex;align-items:center;justify-content:space-between;gap:15px;border-top:1px solid #edf0f6;padding:13px 0}
+.academy-task-row>div{min-width:0;display:grid;gap:5px}
+.academy-task-row strong{font-size:12px;color:#26364f;overflow-wrap:anywhere}
+.academy-task-row small{font-size:10px;color:#7889a1;line-height:1.5}
+.academy-task-row button{flex-shrink:0}
+.academy-task-empty{font-size:12px;color:#78889b;background:#f7f9fc;padding:14px 16px;border-radius:9px;line-height:1.7}
+.academy-task-panel>.text-link{margin-top:11px}
+.academy-todo-page{display:grid;gap:18px}
+.academy-placement-note{background:#f0f5ff;border-radius:9px;padding:13px 15px;font-size:12px;line-height:1.7;color:#495c87}
+.academy-placement-note strong{color:#2b3e72}
+.academy-placement-note .text-link{display:inline-flex;margin-left:8px}
+.academy-sync{font-size:10px;font-weight:800;display:inline-flex;align-items:center;border:1px solid #dfebdf;border-radius:30px;background:#f2f9f1;color:#34855c;padding:8px 11px;white-space:nowrap}
+.academy-sync.saving,.academy-sync.loading{background:#f6f7ff;border-color:#dfe5f6;color:#6872ab}
+.academy-sync.failed{background:#fff1f1;border-color:#ffdada;color:#b14444}
+@media(max-width:1050px){.academy-action-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.academy-task-panel{padding:17px}.academy-task-row{gap:10px}.academy-sync{font-size:9px;padding:7px}.academy-task-row .small-btn{min-width:74px}}
+
+.academy-session-auto{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#2b9161;font-weight:800;margin-right:10px;white-space:nowrap}
+.academy-session-auto svg{width:15px;height:15px}
+@media(max-width:620px){.academy-session-auto{font-size:9px;margin-right:0}}

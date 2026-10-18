@@ -29,7 +29,10 @@ Her iki anahtar değişkenini eklemek zorunlu değildir: URL + **iki anahtardan 
 - Şifreli hesap oluşturma / giriş / şifremi unuttum.
 - E-posta doğrulaması etkinse yeni kullanıcıya doğrulama e-postası gelir.
 - Supabase Auth oturumu varsayılan tarayıcı depolamasında korunur, erişim belirteçleri yenilenir. Çıkış yapılmadığı sürece geçerli oturumla tekrar parola sorulmaz. Tarayıcı verilerinin silinmesi, hesap güvenliğinin değişmesi veya oturumun iptali yeniden giriş gerektirebilir.
-- `study_progress` JSONB satırı: bütün sorular, denemeler, dakika kayıtları, tamamlanan oturumlar ve yarım kalan soru durumu.
+- `study_progress` JSONB satırı: bütün sorular, denemeler, dakika kayıtları ve tamamlanan oturumlar.
+- `payload.version=2` ile `drafts` içinde her konu/test/deneme için ayrı yarım oturum saklanır. Eski `payload.session` sürüm 1 alanındaki geçerli yarım oturum otomatik taşınır.
+- Her ilerleme değişiminde otomatik kaydetme yapılır, geçici cihaz yedeği `guvensor-autosave-v2:<user_id>` anahtarıyla tutulur. Uygulama arka plana alınınca kayıt yeniden denenir.
+- Anapanelde “Yarım Kalanların”, “Bakman Gerekenler”; ayrıca dershane telafi kuyruğu ve ayrı görevler sayfası yer alır.
 - Başka cihazda aynı hesapla giriş yapınca o kullanıcıya ait satır yüklenir. İki cihazda **aynı anda** bağımsız çalışılırsa son kaydeden cihazın verisi diğerini ezebilir; eş zamanlı düzenleme/multi-device conflict merge henüz yoktur.
 - Eski yerel ilerleme varsa yalnızca **bulutta yeni hesap kaydı yokken**, kullanıcıdan izin alınarak aktarılır.
 - Ayarlar ekranında JSON yedeği indir/yükle, parola korumalı oturumdan çıkış ve ilerleme sıfırlama bulunur.
