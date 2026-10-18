@@ -1,9 +1,11 @@
 import {COURSES,TOPICS,getTopic,topicsByCourse,type CourseId,type Topic} from "./curriculum";
+import {curatedQuestions} from "./curated-bank";
 
 export interface Question {id:string;topicId:string;prompt:string;choices:string[];answer:number;solution:string;difficulty:"Kolay"|"Orta"|"Zor";kind:"hesaplama"|"kavrama";}
 export interface AnswerRecord {questionId:string;topicId:string;correct:boolean;selected:number;seconds:number;at:string;kind:"ders"|"deneme"|"tekrar";}
-export interface ExamRecord {id:string;track:"TYT"|"AYT"|"Mini";at:string;correct:number;incorrect:number;empty:number;net:number;seconds:number;}
-export interface StudyState {answers:AnswerRecord[];exams:ExamRecord[];minutes:Record<string,number>;finished:Record<string,string>;activeTopicId?:string;};
+export interface ExamRecord {id:string;track:"TYT"|"AYT"|"Mini"|"Seviye";at:string;correct:number;incorrect:number;empty:number;net:number;seconds:number;}
+export interface PlacementRecord {completedAt:string;correct:number;incorrect:number;empty:number;area:Record<string,{correct:number;total:number}>;}
+export interface StudyState {answers:AnswerRecord[];exams:ExamRecord[];minutes:Record<string,number>;finished:Record<string,string>;activeTopicId?:string;placement?:PlacementRecord;startTime?:string;};
 export const EMPTY:StudyState={answers:[],exams:[],minutes:{},finished:{}};
 const hash=(text:string)=>{let h=2166136261;for(let i=0;i<text.length;i++)h=Math.imul(h^text.charCodeAt(i),16777619);return h>>>0;};
 const rand=(seed:number,max:number)=>hash(String(seed))%max;
@@ -88,12 +90,20 @@ export const makeQuestion=(t:Topic,index:number):Question=>{
  const value=(t.courseId.endsWith("mat")||t.courseId==="tyt-geo")?mathQuestion(t,index):null;
  return value??conceptQuestion(t,index);
 };
-export const makeQuiz=(topic:Topic,count=12,seed=0):Question[]=>Array.from({length:count},(_,i)=>makeQuestion(topic,seed+i));
+export function makeQuiz(topic:Topic,count=12,seed=0):Question[]{
+ const curated=curatedQuestions(topic.id);
+ // Use original, manually-authored questions where the course bank is ready.
+ // All remaining positions are practice templates, not represented as past YKS questions.
+ return Array.from({length:count},(_,i)=>{
+  if(i<curated.length)return curated[(seed+i)%curated.length];
+  return makeQuestion(topic,seed+i);
+ });
+}
 export function makeExam(track:"TYT"|"AYT"|"Mini",seed:number):Question[]{
  const subjects:CourseId[]= track==="TYT" ? ["tyt-turkce","tyt-mat","tyt-tarih","tyt-cografya","tyt-felsefe","tyt-din","tyt-fizik","tyt-kimya","tyt-biyoloji","tyt-geo"] : track==="AYT"? ["ayt-mat","ayt-edebiyat","ayt-tarih","ayt-cografya"] : ["tyt-mat","tyt-turkce","ayt-mat","ayt-edebiyat","ayt-tarih","ayt-cografya"];
  const distribution:Record<string,number>= track==="TYT" ? {"tyt-turkce":40,"tyt-mat":32,"tyt-geo":8,"tyt-tarih":5,"tyt-cografya":5,"tyt-felsefe":5,"tyt-din":5,"tyt-fizik":7,"tyt-kimya":7,"tyt-biyoloji":6} : track==="AYT" ? {"ayt-mat":40,"ayt-edebiyat":24,"ayt-tarih":10,"ayt-cografya":6} : {"tyt-mat":7,"tyt-turkce":7,"ayt-mat":7,"ayt-edebiyat":5,"ayt-tarih":2,"ayt-cografya":2};
  let result:Question[]=[];
- subjects.forEach((course,k)=>{const ts=topicsByCourse(course);for(let i=0;i<(distribution[course]||0);i++){const topic=ts[(i+seed+k*3)%ts.length];result.push(makeQuestion(topic,seed*101+i+k*1000));}});
+ subjects.forEach((course,k)=>{const ts=topicsByCourse(course);for(let i=0;i<(distribution[course]||0);i++){const topic=ts[(i+seed+k*3)%ts.length];result.push(makeQuiz(topic,1,seed*101+i+k*1000)[0]);}});
  return result.map((q,i)=>({...q,id:track+"-"+seed+"-"+i}));
 }
 export function topicStats(state:StudyState,topicId:string){
@@ -101,9 +111,13 @@ export function topicStats(state:StudyState,topicId:string){
  const last=records.slice(-20),correct=last.filter(a=>a.correct).length;
  const accuracy=last.length?Math.round(correct/last.length*100):null;
  const recent=last.at(-1)?.at;
- const days=recent?Math.floor((Date.now()-new Date(recent).getTime())/86400000):999;
+ const days=recent?Math.max(0,Math.floor((Date.now()-new Date(recent).getTime())/86400000)):999;
  const mastery=accuracy===null?0:Math.min(100,Math.round(accuracy*.8+Math.min(last.length,10)*2));
- return {count:records.length,correct,accuracy,days,mastery,weak:records.length>=3&&mastery<72};
+ const baselineMistake=Boolean(state.placement)&&records.some(a=>a.questionId.startsWith("placement-")&&!a.correct);
+ const laterPractice=records.filter(a=>!a.questionId.startsWith("placement-"));
+ // Seviye testindeki tek yanlış, kesin başarısızlık değil; teyit gerektiren önceliktir.
+ const needsValidation=baselineMistake&&laterPractice.length<3;
+ return {count:records.length,correct,accuracy,days,mastery,needsValidation,weak:(records.length>=3&&mastery<72)||needsValidation};
 }
 export function weakTopics(state:StudyState):Topic[]{
  return TOPICS.filter(t=>topicStats(state,t.id).weak).sort((a,b)=>topicStats(state,a.id).mastery-topicStats(state,b.id).mastery);

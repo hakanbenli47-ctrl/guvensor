@@ -19,14 +19,19 @@ Varsayılan adres: http://localhost:3000
 - TYT 120 soru, AYT EA 80 soru ve haftalık mini 30 soruluk test modu.
 - 19 Ekim 2026 – 20 Haziran 2027 için 35 haftalık, haftada 6 gün × günde 4 adet 45 dakikalık çalışma oturumu.
 - Çarşamba/hafta sonu eksik tekrarları; yanıt, süre, doğruluk, konu yeterliği ve net kayıtları.
-- Tarayıcıdaki localStorage ile kalıcı ilerleme; JSON dışa aktarma / içe aktarma.
+- Supabase Auth ile e-posta/şifre girişi ve kalıcı oturum; RLS korumalı bulut ilerlemesi; JSON dışa aktarma / içe aktarma.
+- İlk girişte 36 özgün soruluk TYT/AYT seviye belirleme, kişiye özel zayıf konu analizi.
+- Ayrıntılı anlatımı hazırlanan 15 ana konuda adım adım alt dersler; diğer konular için temel özetler.
+- Özgün, elle yazılmış soru bankasının hazır olan konularda öncelikli kullanımı.
+- Çözüm sonunda yanlış ve boş soruları açıklamalı inceleme, konu pekiştirmeye yönlendirme.
+- İsteğe bağlı günlük başlama saati; 4x45 dakikalık çalışma ve ara molaları.
 - Mobil uyumlu panel ve PDF olarak yazdırılabilir konu anlatımı.
 
 ## İçerik güvenilirliği ve sınırlar
 
 Bu, uygulama içine tek seferde konulmuş **başlangıç düzeyinde kapsamlı konu kataloğu ve çalışan test sistemi**dir. Her konu için en ince ayrıntıyı kapsayan editöryal kitap içeriği, yüzlerce ayrı el yazımı soru veya resmî soru bankası bulunduğu anlamına **gelmez**. Konu açıklamaları özet niteliğindedir; öğretici kaynakla desteklenmelidir. Testler gerçek çıkmış ÖSYM soruları değildir. Sayısal sorularda şablonlara dayalı özgün varyasyonlar üretilir; sözel sorularda örnek soru ve kavramsal tanım eşleştirme kullanılır. Karmaşık geometri şekilleri ve görsel soru desteği bulunmaz. Her bir soru ve cevabın pedagojik editör denetimi yapılmadan resmî sınav eşdeğerliği iddiası taşınmaz.
 
-Uygulama Supabase veya ücretli sunucu hizmetine ihtiyaç duymaz. Veriler sadece kullanılan tarayıcıda kaydedilir; kullanıcı hesabı ve cihazlar arası senkronizasyon **yoktur**. Verileri korumak için Ayarlar menüsünden JSON yedeği alın.
+Uygulama Supabase Auth ve `study_progress` veritabanı gerektirir. Şifreler uygulama koduna gömülmez; Supabase Auth tarafından yönetilir. Giriş sonrasında test ve ders kayıtları hesaba özgü, RLS korumalı veritabanında tutulur. Aynı anda iki cihazda çalışma sonucu ortaya çıkabilecek çakışmalar için son kaydı yazan cihazın ilerlemesi esas alınır. Verileri korumak için Ayarlar menüsünden JSON yedeği alın.
 
 2027 sınav tarihi ve müfredat resmî olarak kesinleştiğinde 35 haftalık plan son tarihe göre gözden geçirilmelidir.
 
@@ -37,6 +42,12 @@ Uygulama Supabase veya ücretli sunucu hizmetine ihtiyaç duymaz. Veriler sadece
 
 ## Teknik
 
+- `lib/cloud.ts` ve `components/AccountGate.tsx`: parola korumalı giriş / çıkış / yenileme
+- `supabase/schema.sql`: güvenli kullanıcı ilerleme kayıtları (Supabase'de etkin)
+- `docs/cloud-setup.md`: production kurulum ve e-posta doğrulama URL ayarları
+- `lib/curated-bank.ts`: özgün soru bankası
+- `lib/deep-lessons.ts`: ayrıntılı konu alt dersleri
+- `lib/placement.ts`: TYT/AYT başlangıç seviye tespiti
 - `lib/curriculum.ts`: konu kataloğu
 - `lib/study.ts`: soru oluşturma, günlük plan, eksik analizi, deneme motoru
 - `app/page.tsx`: ders, test, deneme, analiz, yedekleme ekranları
