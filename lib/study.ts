@@ -168,6 +168,23 @@ export function dailyPlan(date:string,state:StudyState):StudyBlock[]{
   return {id:date+"-"+i,courseId,title:t.title,topicId:t.id,minutes:45,type:"konu" as const};
  });
 }
+/**
+ * Geçmiş, tamamlanmamış dersleri sakla: gün değiştiğinde yeni program başlar,
+ * fakat eksik dersler telafi kuyruğundan silinmez.
+ * Sabit tarih/oturum kimlikleri ile aynı ders tamamlanınca kuyruktan çıkar.
+ */
+export function missedBlocks(today:string,state:StudyState):StudyBlock[]{
+ const last=Math.min(dayDiff(today)-1,dayDiff(END));
+ if(last<0)return [];
+ const results:StudyBlock[]=[];
+ for(let offset=0;offset<=last;offset++){
+  const date=new Date(dateUTC(START).getTime()+offset*86400000).toISOString().slice(0,10);
+  for(const block of dailyPlan(date,state)){
+   if(!state.finished[block.id])results.push(block);
+  }
+ }
+ return results;
+}
 export function monthPlan(state:StudyState){
  const result:{week:number;from:string;topics:number;done:number}[]=[];
  for(let w=0;w<35;w++){
