@@ -6,10 +6,10 @@ import {supabase,PROGRESS_TABLE} from "../lib/cloud";
 import {PLACEMENT,calculatePlacement,PLACEMENT_TIME_MINUTES} from "../lib/placement";
 import {detailed,DETAILED_LESSON_COUNT} from "../lib/deep-lessons";
 import {COURSES,TOPICS,getTopic,getCourse,topicsByCourse,type CourseId,type Topic} from "../lib/curriculum";
-import {EMPTY,END_DATE,START_DATE,completionPercent,currentWeek,dailyPlan,dateKey,dueTopics,formatDuration,makeExam,makeQuiz,monthPlan,selectedDate,topicStats,weakTopics,type Question,type StudyBlock,type StudyState,type AnswerRecord} from "../lib/study";
+import {EMPTY,END_DATE,START_DATE,completionPercent,currentWeek,dailyPlan,missedBlocks,dateKey,dueTopics,formatDuration,makeExam,makeQuiz,monthPlan,selectedDate,topicStats,weakTopics,type Question,type StudyBlock,type StudyState,type AnswerRecord} from "../lib/study";
 type Page="home"|"subjects"|"calendar"|"exams"|"analytics"|"settings";
 type Mode="ders"|"tekrar"|"deneme";
-type Session={questions:Question[];step:"learn"|"quiz"|"result";index:number;selected:Record<number,number>;mode:Mode;topicId?:string;blockId?:string;examType?:"Mini"|"TYT"|"AYT"|"Seviye";startedAt:number;questionStartedAt:number;};
+type Session={questions:Question[];step:"learn"|"quiz"|"result";index:number;selected:Record<number,number>;mode:Mode;topicId?:string;blockId?:string;examType?:"Mini"|"TYT"|"AYT"|"Seviye";startedAt:number;questionStartedAt:number;pausedAt?:number;lessonSection?:number;};
 const STORAGE="yks-koc-2027-progress-v1", SESSION="yks-koc-2027-session-v1";
 const prettyDate=(iso:string)=>new Date(iso+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric",weekday:"long"});
 const weekDays=["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"];
@@ -37,6 +37,8 @@ function Dashboard({user}:{user:User}){
  const [course,setCourse]=useState<CourseId>("tyt-mat");
  const [search,setSearch]=useState("");
  const [session,setSession]=useState<Session|null>(null);
+ const [sessionHidden,setSessionHidden]=useState(false);
+ const [showAllMakeups,setShowAllMakeups]=useState(false);
  const [now,setNow]=useState(Date.now());
  const [examReport,setExamReport]=useState<{correct:number;incorrect:number;empty:number;net:number;track:string}|null>(null);
  const [notice,setNotice]=useState("");
@@ -71,7 +73,7 @@ function Dashboard({user}:{user:User}){
       }catch{}
     }
     if(!alive)return;
-    setProgress(incoming);setSession(restored);setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
+    setProgress(incoming);setSession(restored?{...restored,pausedAt:restored.pausedAt??Date.now()}:null);setSessionHidden(Boolean(restored));setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
    }catch(err){if(alive)setLoadError(err instanceof Error?err.message:"Çalışma verilerin buluttan yüklenemedi.");}
   }
   void load();
@@ -100,6 +102,7 @@ function Dashboard({user}:{user:User}){
  useEffect(()=>{const timer=setInterval(()=>{setNow(Date.now());setToday(dateKey())},1000);return()=>clearInterval(timer)},[]);
  const day=selectedDate(today);
  const plan=useMemo(()=>dailyPlan(day,progress),[day,progress]);
+ const makeups=useMemo(()=>missedBlocks(today,progress),[today,progress]);
  const weak=useMemo(()=>weakTopics(progress),[progress]);
  const due=useMemo(()=>dueTopics(progress),[progress]);
  const current=plan.find(b=>!progress.finished[b.id])||plan[0];
@@ -114,21 +117,31 @@ function Dashboard({user}:{user:User}){
  const expanded=activeTopic?detailed(activeTopic.id):undefined;
  const activeQ=session?.step==="quiz"?session.questions[session.index]:undefined;
  const examTimeLimit=session?.examType==="TYT"?165*60:session?.examType==="AYT"?180*60:session?.examType==="Mini"?45*60:45*60;
- const elapsed=session?Math.floor((now-session.startedAt)/1000):0;
+ const elapsed=session?Math.max(0,Math.floor(((session.pausedAt??now)-session.startedAt)/1000)):0;
  const timeLeft=Math.max(0,examTimeLimit-elapsed);
  const questionTotal=session?.questions.length||0;
  const answered=session?Object.keys(session.selected).length:0;
+ function pauseLesson(){setSession(s=>s?{...s,pausedAt:Date.now()}:s);setSessionHidden(true);}
+ function resumeLesson(){
+  setSession(s=>s?{...s,startedAt:s.startedAt+(s.pausedAt?Date.now()-s.pausedAt:0),questionStartedAt:s.questionStartedAt+(s.pausedAt?Date.now()-s.pausedAt:0),pausedAt:undefined}:s);
+  setSessionHidden(false);setPage("home");
+ }
+ function okayToReplaceSession(){return !session||window.confirm("Yarım kalan bir oturumun var. Yeni bir oturum başlatırsan mevcut yarım oturumun kaydı silinecek. Devam edilsin mi?");}
  function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
+  if(!okayToReplaceSession())return;
+  setSessionHidden(false);
   const n=progress.answers.filter(a=>a.topicId===topic.id).length;
   setSession({questions:makeQuiz(topic,mode==="tekrar"?15:12,n),step:"learn",index:0,selected:{},mode,topicId:topic.id,blockId:block?.id,startedAt:Date.now(),questionStartedAt:Date.now()});
   setExamReport(null);setPage("home");
  }
  function startExam(track:"Mini"|"TYT"|"AYT",block?:StudyBlock){
+  if(!okayToReplaceSession())return;
+  setSessionHidden(false);
   const seed=progress.exams.length+1;
   setSession({questions:makeExam(track,seed),step:"quiz",index:0,selected:{},mode:"deneme",blockId:block?.id,examType:track,startedAt:Date.now(),questionStartedAt:Date.now()});
   setExamReport(null);setPage("home");
  }
- function startPlacement(){setSession({questions:PLACEMENT,step:"quiz",index:0,selected:{},mode:"deneme",examType:"Seviye",startedAt:Date.now(),questionStartedAt:Date.now()});setExamReport(null);setPage("home");}
+ function startPlacement(){if(!okayToReplaceSession())return;setSessionHidden(false);setSession({questions:PLACEMENT,step:"quiz",index:0,selected:{},mode:"deneme",examType:"Seviye",startedAt:Date.now(),questionStartedAt:Date.now()});setExamReport(null);setPage("home");}
  function startBlock(block:StudyBlock){
   if(block.type==="deneme"){startExam("Mini",block);return;}
   const t=getTopic(block.topicId||"");if(t)startTopic(t,block,block.type==="tekrar"?"tekrar":"ders");
@@ -152,7 +165,7 @@ function Dashboard({user}:{user:User}){
  }
  function nav(next:Page){setPage(next);setNotice("");}
  function resetData(){
-  if(window.confirm("Tüm kişisel ilerleme ve denemeler bu tarayıcıdan silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setSession(null);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
+  if(window.confirm("Tüm kişisel ilerleme ve denemeler bu tarayıcıdan silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setSession(null);setSessionHidden(false);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
  }
  function exportData(){
   const payload=JSON.stringify({version:1,exportedAt:new Date().toISOString(),progress},null,2);
@@ -164,7 +177,7 @@ function Dashboard({user}:{user:User}){
   const f=event.target.files?.[0];if(!f)return;
   try{const obj=JSON.parse(await f.text());if(!obj.progress||!Array.isArray(obj.progress.answers))throw Error("Geçersiz dosya");
    if(!window.confirm("Yedekteki ilerleme mevcut kayıtların yerine geçecek. Devam edilsin mi?"))return;
-   setProgress(safeState(obj.progress));setSession(null);setNotice("Yedek başarıyla yüklendi.");
+   setProgress(safeState(obj.progress));setSession(null);setSessionHidden(false);setNotice("Yedek başarıyla yüklendi.");
   }catch{setNotice("Yedek dosyası geçersiz.")}
   event.target.value="";
  }
@@ -181,12 +194,12 @@ function Dashboard({user}:{user:User}){
   </aside>
   <main className="main">
    <header className="topbar"><div className="topbar-title"><span className="eyebrow">2027 YKS HAZIRLIK PLATFORMU</span><h1>{session?"Çalışma oturumu":page==="home"?"Bugün seni neler bekliyor?":page==="subjects"?"Konu kütüphanesi":page==="calendar"?"8 aylık çalışma planın":page==="exams"?"Deneme merkezi":page==="analytics"?"Performans analizi":"Ayarlar ve yedekleme"}</h1><p>{session?"Konu anlatımı, çözümlü sorular ve kişisel öğrenme analizi.":page==="home"?"Her gün 3 saat. Her hafta yeni bir adım.":"Hedefin için hazırlanan çalışma sistemin."}</p></div><div className="header-actions"><span className="date-chip"><MiniIcon name="calendar"/>{prettyDate(today)}</span><span className="target-chip">EA · 2027</span><span className="account-chip" title={user.email}>{user.email}</span></div></header>
-   {loadError?<div className="panel load-error"><h2>Çalışma kayıtların yüklenemedi</h2><p>{loadError}</p><p>Supabase bağlantısını ve <code>study_progress</code> tablosunun güvenlik kurallarını kontrol et. Veriler kaybolmasın diye çalışma ekranını açmıyoruz.</p><button className="btn primary" onClick={()=>window.location.reload()}>Tekrar dene</button></div>:!hydrated?<div className="panel empty">Çalışma verilerin buluttan yükleniyor…</div>:session? <section className="session-wrap">
-    <div className="session-bar"><button className="back-link" onClick={()=>{if(window.confirm("Oturumu kapatırsan ilerleyen soruların bu oturum için kaydedilmez. Devam?"))setSession(null)}}><MiniIcon name="back"/> Çalışmaya dön</button><div className="session-meta"><span><MiniIcon name="clock"/>{session.examType?formatDuration(timeLeft)+" kaldı":formatDuration(elapsed)}</span><b>{session.step==="learn"?"Konu anlatımı":session.step==="result"?"Tamamlandı":(session.index+1)+"/"+questionTotal+" soru"}</b></div></div>
+   {loadError?<div className="panel load-error"><h2>Çalışma kayıtların yüklenemedi</h2><p>{loadError}</p><p>Supabase bağlantısını ve <code>study_progress</code> tablosunun güvenlik kurallarını kontrol et. Veriler kaybolmasın diye çalışma ekranını açmıyoruz.</p><button className="btn primary" onClick={()=>window.location.reload()}>Tekrar dene</button></div>:!hydrated?<div className="panel empty">Çalışma verilerin buluttan yükleniyor…</div>:session&&!sessionHidden? <section className="session-wrap">
+    <div className="session-bar"><button className="back-link" onClick={pauseLesson}><MiniIcon name="back"/> Kaydet ve ara ver</button><div className="session-meta"><span><MiniIcon name="clock"/>{session.examType?formatDuration(timeLeft)+" kaldı":formatDuration(elapsed)}</span><b>{session.step==="learn"?"Konu anlatımı":session.step==="result"?"Tamamlandı":(session.index+1)+"/"+questionTotal+" soru"}</b></div></div>
     {session.step==="learn"&&activeTopic?<div className="lesson-layout">
       <article className="panel lesson-panel"><div className="subject-tag">{getCourse(activeTopic.courseId).label}</div><h2>{activeTopic.title}</h2><p className="intro">{activeTopic.summary}</p><h3>Konunun temel kuralları</h3><div className="lesson-principles">{activeTopic.principles.map((line,i)=><div key={i} className="principle"><span>{i+1}</span><p>{line}</p></div>)}</div>
-     {expanded?<div className="deep-lesson"><div className="deep-head"><span className="eyebrow">AYRINTILI DERS NOTU</span><h3>Bu derste kazanacakların</h3><ul>{expanded.outcomes.map((x,i)=><li key={i}>{x}</li>)}</ul></div>
-      {expanded.sections.map((part,i)=><section className="deep-section" key={i}><span className="deep-index">BÖLÜM {i+1}</span><h3>{part.title}</h3><p>{part.explanation}</p>{part.formula?<div className="deep-formula">{part.formula}</div>:null}<div className="deep-example"><b>Örnek: {part.example.question}</b><ol>{part.example.steps.map((step,j)=><li key={j}>{step}</li>)}</ol><strong>Cevap: {part.example.answer}</strong></div><div className="deep-mistake"><strong>Sık yapılan hata</strong><p>{part.mistake}</p></div></section>)}
+     {expanded?<div className="deep-lesson"><div className="deep-head"><span className="eyebrow">AYRINTILI DERS NOTU</span><h3>Bu derste kazanacakların</h3><ul>{expanded.outcomes.map((x,i)=><li key={i}>{x}</li>)}</ul>{session.lessonSection!==undefined?<div className="lesson-resume-notice">Ders ilerlemen: {Math.min(session.lessonSection,expanded.sections.length)} / {expanded.sections.length} bölüm. {session.lessonSection<expanded.sections.length?<a href={"#ders-bolumu-"+session.lessonSection}>Kaldığın bölüme git</a>:"Anlatımı tamamladın; teste geçebilirsin."}</div>:null}</div>
+      {expanded.sections.map((part,i)=><section className="deep-section" id={"ders-bolumu-"+i} key={i}><span className="deep-index">BÖLÜM {i+1} · {(session.lessonSection??0)>i?"TAMAMLANDI":(session.lessonSection??0)===i?"SIRADAKİ":"BEKLİYOR"}</span><h3>{part.title}</h3><p>{part.explanation}</p>{part.formula?<div className="deep-formula">{part.formula}</div>:null}<div className="deep-example"><b>Örnek: {part.example.question}</b><ol>{part.example.steps.map((step,j)=><li key={j}>{step}</li>)}</ol><strong>Cevap: {part.example.answer}</strong></div><div className="deep-mistake"><strong>Sık yapılan hata</strong><p>{part.mistake}</p></div><button className="btn outline chapter-check" onClick={()=>setSession(s=>s?{...s,lessonSection:Math.max(s.lessonSection??0,i+1)}:s)} disabled={(session.lessonSection??0)>i}>{(session.lessonSection??0)>i?"Bölüm tamamlandı":"Bu bölümü okudum"}</button></section>)}
       <div className="deep-recap"><h3>Öğrendiklerini kontrol et</h3><ul>{expanded.recap.map((x,i)=><li key={i}>{x}</li>)}</ul><p><b>Ev çalışması:</b> {expanded.practicePlan}</p></div>
      </div>:<div className="info-banner">Bu konu için ayrıntılı ders modülü henüz geliştirilmedi. Şu an temel özet ve örnek sunuluyor; kapsamlı ders içeriği tamamlanıncaya kadar bunu tek başına yeterli kaynak olarak kullanma.</div>}
      <h3>Adım adım çözümlü örnek</h3><div className="example"><strong>{activeTopic.worked}</strong><div className="example-solution"><span>ÇÖZÜM</span><p>{activeTopic.solution}</p></div></div><h3>Sınavda dikkat edilecekler</h3><p>Önce sorunun ne istediğini belirle. Tanımı ezberlemek yerine verilenleri adım adım kullan. İşlem ve yorum hatası yaparsan hatanın hangi basamakta başladığını not al. Çözümü tekrar kapatıp kendin yap.</p><div className="lesson-actions"><button className="btn ghost" onClick={()=>window.print()}>Yazdır / PDF kaydet</button><button className="btn primary" onClick={()=>setSession(s=>s?{...s,step:"quiz",questionStartedAt:Date.now()}:s)}><MiniIcon name="play"/> Teste geç · {session.questions.length} soru</button></div></article>
@@ -201,6 +214,8 @@ function Dashboard({user}:{user:User}){
      <section className="welcome"><div><span className="eyebrow light">KİŞİSEL ÇALIŞMA PLANI</span><h2>Hedefin belli.<br/>Bugün bir adım daha ilerle.</h2><p>Akdeniz Üniversitesi Psikoloji için TYT ve AYT eşit ağırlık hazırlığın. Öğrendikçe güçlenen bir program.</p><button className="btn white" onClick={()=>{if(current)startBlock(current);else nav("subjects")}}><MiniIcon name="play"/>{current?"Çalışmaya başla":"Konu seç ve başla"} <MiniIcon name="arrow"/></button></div><div className="hero-orbit"><div className="orb"><strong>2027</strong><span>YKS</span></div><span className="orbit-ring first"/><span className="orbit-ring second"/></div></section>
      {!progress.placement?<div className="placement-banner"><div><span className="eyebrow">DERSHANEYE BAŞLANGIÇ · SEVİYE TESPİTİ</span><h2>Önce hangi konuları bildiğini ölçelim.</h2><p>36 özgün soru · {PLACEMENT_TIME_MINUTES} dakika · TYT Matematik ve Türkçe, AYT Matematik ve Edebiyat. Sonuçlarına göre eksiklerini belirleyip tekrar önceliğini ayarlayacağız.</p></div><button className="btn primary" onClick={startPlacement}>Seviye sınavına başla <MiniIcon name="arrow"/></button></div>:<div className="placement-done"><MiniIcon name="check"/><span>Seviye tespiti tamamlandı: {progress.placement.correct}/36 doğru.</span><button onClick={()=>nav("analytics")}>Sonuçları gör <MiniIcon name="arrow"/></button></div>}
      {today<START_DATE?<div className="info-banner">Programın ilk günü 19 Ekim Pazartesi. İstersen ilk dersi şimdiden başlatabilirsin.</div>:null}
+     {session&&sessionHidden?<div className="academy-pause-banner"><div><span className="eyebrow">YARIM KALAN OTURUM</span><h2>{session.examType?session.examType+" sınavı":getTopic(session.topicId||"")?.title||"Ders"} · {session.step==="learn"?"Konu anlatımı":session.index+1+". soru"}</h2><p>{session.step==="learn"&&session.lessonSection!==undefined?"Son işaretlediğin alt ders: "+session.lessonSection+". bölüm. ":""}İlerlemen hesabına kaydediliyor; kaldığın yerden devam edebilirsin.</p></div><div className="academy-pause-actions"><button className="btn primary" onClick={resumeLesson}>Kaldığım yerden devam et</button><button className="btn ghost" onClick={()=>{if(window.confirm("Yarım kalan oturumu silmek istediğine emin misin?")){setSession(null);setSessionHidden(false)}}}>Oturumu bırak</button></div></div>:null}
+     {makeups.length?<div className="academy-makeup"><div className="section-heading"><div><span className="eyebrow">DERSHANE TELAFİ MERKEZİ</span><h2>Bekleyen {makeups.length} dersin var</h2><p>Dünün veya daha eski günlerin tamamlanmayan dersleri silinmez. Bugünkü program ayrı kalır; uygun olduğunda telafileri tamamlayabilirsin.</p></div></div><div className="academy-makeup-list">{(showAllMakeups?makeups:makeups.slice(0,5)).map(b=><div className="academy-makeup-row" key={b.id}><div><small>{prettyDate(b.id.slice(0,10))} · {b.type==="deneme"?"Deneme":b.type==="tekrar"?"Tekrar":"Ders"}</small><strong>{b.title}</strong></div><button className="small-btn" onClick={()=>startBlock(b)}>Telafi et</button></div>)}</div>{makeups.length>5?<button className="text-link academy-more" onClick={()=>setShowAllMakeups(v=>!v)}>{showAllMakeups?"Listeyi daralt":(makeups.length-5)+" dersi daha göster"} <MiniIcon name="arrow"/></button>:null}</div>:null}
      <section className="metric-grid"><div className="metric"><span>TOPLAM ÇÖZÜLEN</span><strong>{answeredCount}</strong><small>soru</small></div><div className="metric"><span>DOĞRULUK ORANI</span><strong>%{accuracy}</strong><small>tüm testler</small></div><div className="metric"><span>ÇALIŞMA SÜRESİ</span><strong>{Math.floor(studyMinutes/60)}<i>sa</i> {studyMinutes%60}<i>dk</i></strong><small>kaydedilen süre</small></div><div className="metric"><span>ÇALIŞILAN KONU</span><strong>{solvedTopics}</strong><small>/ {TOPICS.length} konu</small></div></section>
      <section className="dashboard-grid"><div className="panel today-panel"><div className="section-heading"><div><span className="eyebrow">GÜNLÜK PROGRAM</span><h2>{prettyDate(day)}</h2></div><span className="time-pill">180 dk · 4 oturum</span></div><div className="daily-progress"><div><b>Bugünkü ilerleme</b><span>{Math.min(dayMinutes,maxDaily)} / 180 dk</span></div><div className="progress-rail"><div style={{width:Math.min(100,dayMinutes/maxDaily*100)+"%"}}/></div></div>{plan.length? <div className="block-list">{plan.map((b,i)=>{const done=!!progress.finished[b.id];const crs=b.courseId==="mock"?undefined:b.courseId==="review"?undefined:getCourse(b.courseId);return <div key={b.id} className={"study-row "+(done?"done":"")}><div className="row-time">{String(i+1).padStart(2,"0")}</div><div className="row-main"><span className="topic-type" style={{color:crs?.color||"#7285a0"}}>{b.type==="tekrar"?"TEKRAR":b.type==="deneme"?"DENEME":crs?.label.toLocaleUpperCase("tr-TR")}</span><h3>{b.title}</h3><span className="muted">{lessonClock(progress.startTime,i)?lessonClock(progress.startTime,i)+" · ":"45 dakika · "}{b.type==="deneme"?"30 soru":b.type==="tekrar"?"15 soru":"12 soru"}</span></div><button disabled={done} className={"row-btn "+(done?"is-done":"")} onClick={()=>startBlock(b)}>{done?<MiniIcon name="check"/>:<MiniIcon name="arrow"/>}</button></div>})}</div>:<div className="empty">Pazar günü dinlenme ve hafif tekrar günü. İstersen kütüphaneden konu seçebilirsin.</div>}</div><div className="side-stack"><div className="panel focus"><span className="eyebrow">BU HAFTAKİ DURUM</span><h2>{currentWeek(day)}. hafta</h2><div className="focus-large">{35-currentWeek(day)}<small> hafta kalan (yaklaşık)</small></div><p>2027 YKS sınav tarihi açıklandığında takvimi resmî tarihe göre ayarla.</p><button className="text-link" onClick={()=>nav("calendar")}>Takvimi incele <MiniIcon name="arrow"/></button></div><div className="panel focus"><span className="eyebrow">AKILLI TEKRAR</span><h2>Eksiklerin takipte</h2>{weak.length?<><p>{weak.length} konuda pekiştirme öneriliyor. En düşük başarıdan başlayalım.</p><button className="btn outline" onClick={()=>startTopic(weak[0],undefined,"tekrar")}>Tekrara başla</button></>:<p>Henüz düşük başarı tespit edilmedi. Testler çözdükçe tekrar listesi oluşacak.</p>}</div></div></section>
      <div className="below-note"><MiniIcon name="book"/> <b>{TOPICS.length} konu</b> katalogda, <b>{DETAILED_LESSON_COUNT} konuda</b> ayrıntılı ders modülü hazır. Kalan konular özet düzeyindedir. Resmî ÖSYM soruları değildir.</div>
