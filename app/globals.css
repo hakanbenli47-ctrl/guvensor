@@ -59,3 +59,32 @@
 .signout-btn{margin-left:10px}
 @media(max-width:930px){.auth-shell{grid-template-columns:1fr;max-width:550px}.auth-aside{display:none}.auth-panel{padding:36px 30px}.auth-brand{margin-bottom:40px}}
 @media(max-width:540px){.auth-page{padding:12px}.auth-panel{padding:30px 23px}.auth-panel h1{font-size:27px}.auth-brand{margin-bottom:32px}.account-chip{max-width:150px}.signout-btn{margin:10px 0 0}.header-actions{flex-wrap:wrap}}
+
+/* Placement assessment and lesson modules */
+.placement-banner{margin:18px 0;background:#fff;border:1px solid #dce1f3;border-radius:17px;padding:22px 24px;display:flex;gap:18px;align-items:center;justify-content:space-between;box-shadow:0 7px 24px #384aa009}
+.placement-banner h2{font-size:19px;letter-spacing:-.5px;margin:8px 0}
+.placement-banner p{font-size:11px;color:#7888a3;margin:0;max-width:710px}
+.placement-banner .btn{white-space:nowrap;flex-shrink:0}
+.placement-done{display:flex;align-items:center;gap:10px;padding:13px 17px;margin:17px 0;border:1px solid #d0edda;border-radius:11px;background:#effbf4;color:#368152;font-size:11px;font-weight:700}
+.placement-done>span{flex:1}.placement-done button{display:flex;align-items:center;gap:7px;font-size:10px;font-weight:800;background:transparent;border:0;color:#267e4d}
+.placement-summary{background:#fff;border:1px solid var(--line);border-radius:15px;padding:24px;margin-bottom:16px}
+.placement-areas{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-top:20px}
+.placement-areas>div{padding:12px;border-radius:11px;background:#f8f9fd}
+.placement-areas strong{display:block;font-size:10px;margin-bottom:7px}
+.placement-areas span{display:block;color:#7788a0;font-size:10px;margin-bottom:10px}
+.deep-lesson{margin:27px 0 10px;border-top:1px solid var(--line);padding-top:16px}
+.deep-head{padding:16px 20px 8px;background:#f8f9ff;border-radius:12px}
+.deep-head h3{margin:9px 0}.deep-head ul,.deep-recap ul{margin:10px 0 14px;padding-left:20px;color:#526079;font-size:12px;line-height:1.9}
+.deep-section{padding:22px 0 24px;border-bottom:1px solid var(--line)}
+.deep-section h3{margin:9px 0 14px;font-size:18px}.deep-section>p{font-size:12px;color:#5b6a82;line-height:2}
+.deep-index{letter-spacing:1.5px;color:#737ed3;font-weight:900;font-size:10px}
+.deep-formula{padding:13px 18px;border:1px solid #dfe4f7;border-radius:9px;background:#f4f6ff;font-size:14px;color:#3542a0;font-weight:800}
+.deep-example{margin-top:15px;border-left:3px solid #646de1;padding:18px;background:#f5f6fe;border-radius:0 12px 12px 0}
+.deep-example b{font-size:13px}.deep-example ol{padding-left:19px;color:#5d6c83;line-height:1.9;font-size:12px;margin:12px 0}
+.deep-example strong{color:#3847a8;font-size:12px}
+.deep-mistake{margin-top:13px;background:#fff8ef;border:1px solid #f5e6c9;padding:13px 15px;border-radius:9px}
+.deep-mistake strong{font-size:11px;color:#a47c38}.deep-mistake p{font-size:11px;color:#947954;margin:4px 0}
+.deep-recap{background:#eef8f3;padding:20px;border-radius:13px;margin-top:19px}
+.deep-recap h3{margin:0;color:#346b55;font-size:16px}.deep-recap p{font-size:11px;color:#467460}
+@media(max-width:850px){.placement-areas{grid-template-columns:repeat(2,minmax(0,1fr))}.placement-banner{flex-direction:column;align-items:start}.placement-banner .btn{width:100%}}
+@media(max-width:500px){.placement-areas{grid-template-columns:1fr}.placement-summary{padding:17px}.deep-example{padding:12px}}
