@@ -102,9 +102,13 @@ export function topicStats(state:StudyState,topicId:string){
  const last=records.slice(-20),correct=last.filter(a=>a.correct).length;
  const accuracy=last.length?Math.round(correct/last.length*100):null;
  const recent=last.at(-1)?.at;
- const days=recent?Math.floor((Date.now()-new Date(recent).getTime())/86400000):999;
+ const days=recent?Math.max(0,Math.floor((Date.now()-new Date(recent).getTime())/86400000)):999;
  const mastery=accuracy===null?0:Math.min(100,Math.round(accuracy*.8+Math.min(last.length,10)*2));
- return {count:records.length,correct,accuracy,days,mastery,weak:records.length>=3&&mastery<72};
+ const baselineMistake=Boolean(state.placement)&&records.some(a=>a.questionId.startsWith("placement-")&&!a.correct);
+ const laterPractice=records.filter(a=>!a.questionId.startsWith("placement-"));
+ // Seviye testindeki tek yanlış, kesin başarısızlık değil; teyit gerektiren önceliktir.
+ const needsValidation=baselineMistake&&laterPractice.length<3;
+ return {count:records.length,correct,accuracy,days,mastery,needsValidation,weak:(records.length>=3&&mastery<72)||needsValidation};
 }
 export function weakTopics(state:StudyState):Topic[]{
  return TOPICS.filter(t=>topicStats(state,t.id).weak).sort((a,b)=>topicStats(state,a.id).mastery-topicStats(state,b.id).mastery);
