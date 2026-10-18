@@ -1,5 +1,8 @@
 "use client";
-import {useEffect,useMemo,useState} from "react";
+import {useEffect,useMemo,useRef,useState} from "react";
+import type {User} from "@supabase/supabase-js";
+import AccountGate from "../components/AccountGate";
+import {supabase,PROGRESS_TABLE} from "../lib/cloud";
 import {COURSES,TOPICS,getTopic,getCourse,topicsByCourse,type CourseId,type Topic} from "../lib/curriculum";
 import {EMPTY,END_DATE,START_DATE,completionPercent,currentWeek,dailyPlan,dateKey,dueTopics,formatDuration,makeExam,makeQuiz,monthPlan,selectedDate,topicStats,weakTopics,type Question,type StudyBlock,type StudyState,type AnswerRecord} from "../lib/study";
 type Page="home"|"subjects"|"calendar"|"exams"|"analytics"|"settings";
@@ -15,7 +18,8 @@ const safeState=(x:unknown):StudyState=>{
  return {answers:Array.isArray(o.answers)?o.answers:[],exams:Array.isArray(o.exams)?o.exams:[],minutes:typeof o.minutes==="object"&&o.minutes?o.minutes:{},finished:typeof o.finished==="object"&&o.finished?o.finished:{},activeTopicId:typeof o.activeTopicId==="string"?o.activeTopicId:undefined};
 };
 function MiniIcon({name}:{name:string}){const paths:Record<string,string>={home:"M3 10.5 12 3l9 7.5V21H3V10.5zm6 10.5v-7h6v7",book:"M3 5c3-2 6-2 9 0v16c-3-2-6-2-9 0V5zm9 0c3-2 6-2 9 0v16c-3-2-6-2-9 0",calendar:"M4 6h16v15H4zM4 10h16M8 3v6M16 3v6",award:"M12 3a7 7 0 1 0 0 14 7 7 0 1 0 0-14ZM8 16l-1 6 5-3 5 3-1-6",chart:"M4 20V12h4v8M10 20V4h4v16M16 20v-9h4v9",settings:"M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.7-2.1 2.1m-8.6 8.6-2.1 2.1M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8",arrow:"M5 12h14m-6-6 6 6-6 6",clock:"M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18zm0 4v5l4 2",check:"M4 12l5 5L20 6",play:"M8 5l11 7-11 7z",back:"M19 12H5m6-6-6 6 6 6"};return <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.book}/></svg>}
-export default function Home(){
+export default function Home(){return <AccountGate>{user=><Dashboard key={user.id} user={user}/>}</AccountGate>}
+function Dashboard({user}:{user:User}){
  const [page,setPage]=useState<Page>("home");
  const [progress,setProgress]=useState<StudyState>(EMPTY);
  const [hydrated,setHydrated]=useState(false);
@@ -26,9 +30,63 @@ export default function Home(){
  const [now,setNow]=useState(Date.now());
  const [examReport,setExamReport]=useState<{correct:number;incorrect:number;empty:number;net:number;track:string}|null>(null);
  const [notice,setNotice]=useState("");
- useEffect(()=>{try{const s=localStorage.getItem(STORAGE);if(s)setProgress(safeState(JSON.parse(s)));const q=localStorage.getItem(SESSION);if(q){const o=JSON.parse(q);if(o&&Array.isArray(o.questions)&&o.questions.length&&o.step!=="result")setSession(o)}}catch{}setToday(dateKey());setHydrated(true)},[]);
- useEffect(()=>{if(hydrated)localStorage.setItem(STORAGE,JSON.stringify(progress))},[progress,hydrated]);
- useEffect(()=>{if(hydrated){if(session&&session.step!=="result")localStorage.setItem(SESSION,JSON.stringify(session));else localStorage.removeItem(SESSION)}},[session,hydrated]);
+ const [loadError,setLoadError]=useState("");
+ const [syncError,setSyncError]=useState("");
+ const [syncStatus,setSyncStatus]=useState<"loading"|"saving"|"saved">("loading");
+ const [retrySave,setRetrySave]=useState(0);
+ const saveQueue=useRef<Promise<void>>(Promise.resolve());
+ useEffect(()=>{
+  let alive=true;
+  const client=supabase;
+  if(!client){setLoadError("Bulut bağlantısı yapılandırılmadı.");return;}
+  async function load(){
+   try{
+    const {data,error}=await client!.from(PROGRESS_TABLE).select("payload").eq("user_id",user.id).maybeSingle();
+    if(!alive)return;
+    if(error)throw error;
+    let incoming:StudyState=EMPTY,restored:Session|null=null;
+    if(data?.payload && typeof data.payload==="object"){
+      const payload=data.payload as {progress?:unknown;session?:unknown};
+      incoming=safeState(payload.progress);
+      const old=payload.session as Session|null;
+      if(old&&Array.isArray(old.questions)&&old.questions.length&&old.step!=="result")restored=old;
+    }else{
+      try{
+        const legacy=localStorage.getItem(STORAGE);
+        if(legacy&&window.confirm("Bu cihazdaki eski çalışma kayıtlarını hesabına aktarmak ister misin?")){
+          incoming=safeState(JSON.parse(legacy));
+          const raw=localStorage.getItem(SESSION);
+          if(raw){const previous=JSON.parse(raw) as Session;if(previous?.questions?.length&&previous.step!=="result")restored=previous;}
+        }
+      }catch{}
+    }
+    if(!alive)return;
+    setProgress(incoming);setSession(restored);setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
+   }catch(err){if(alive)setLoadError(err instanceof Error?err.message:"Çalışma verilerin buluttan yüklenemedi.");}
+  }
+  void load();
+  return()=>{alive=false;};
+ },[user.id]);
+ useEffect(()=>{
+  if(!hydrated||!supabase)return;
+  const client=supabase,payload={version:1,progress,session:session?.step==="result"?null:session};
+  setSyncStatus("saving");
+  const timer=setTimeout(()=>{
+    saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{
+      const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+      if(error)throw error;
+    });
+    void saveQueue.current.then(()=>{setSyncStatus("saved");setSyncError("");}).catch(err=>setSyncError(err instanceof Error?err.message:"Buluta kaydedilemedi."));
+  },400);
+  return()=>clearTimeout(timer);
+ },[progress,session,hydrated,user.id,retrySave]);
+ async function logout(){
+  if(!supabase)return;
+  const {error}=await supabase.from(PROGRESS_TABLE).upsert({user_id:user.id,payload:{version:1,progress,session:session?.step==="result"?null:session},updated_at:new Date().toISOString()},{onConflict:"user_id"});
+  if(error){setSyncError("Çıkış öncesi kayıt başarısız: "+error.message);return;}
+  await saveQueue.current.catch(()=>undefined);
+  await supabase.auth.signOut();
+ }
  useEffect(()=>{const timer=setInterval(()=>{setNow(Date.now());setToday(dateKey())},1000);return()=>clearInterval(timer)},[]);
  const day=selectedDate(today);
  const plan=useMemo(()=>dailyPlan(day,progress),[day,progress]);
@@ -109,8 +167,8 @@ export default function Home(){
    <div className="side-bottom"><div className="mini-avatar">Y</div><div><strong>YKS Yolculuğun</strong><small>{currentWeek(day)}. hafta · Günde 3 saat</small></div></div>
   </aside>
   <main className="main">
-   <header className="topbar"><div className="topbar-title"><span className="eyebrow">2027 YKS HAZIRLIK PLATFORMU</span><h1>{session?"Çalışma oturumu":page==="home"?"Bugün seni neler bekliyor?":page==="subjects"?"Konu kütüphanesi":page==="calendar"?"8 aylık çalışma planın":page==="exams"?"Deneme merkezi":page==="analytics"?"Performans analizi":"Ayarlar ve yedekleme"}</h1><p>{session?"Konu anlatımı, çözümlü sorular ve kişisel öğrenme analizi.":page==="home"?"Her gün 3 saat. Her hafta yeni bir adım.":"Hedefin için hazırlanan çalışma sistemin."}</p></div><div className="header-actions"><span className="date-chip"><MiniIcon name="calendar"/>{prettyDate(today)}</span><span className="target-chip">EA · 2027</span></div></header>
-   {!hydrated?<div className="panel empty">Çalışma verilerin yükleniyor…</div>:session? <section className="session-wrap">
+   <header className="topbar"><div className="topbar-title"><span className="eyebrow">2027 YKS HAZIRLIK PLATFORMU</span><h1>{session?"Çalışma oturumu":page==="home"?"Bugün seni neler bekliyor?":page==="subjects"?"Konu kütüphanesi":page==="calendar"?"8 aylık çalışma planın":page==="exams"?"Deneme merkezi":page==="analytics"?"Performans analizi":"Ayarlar ve yedekleme"}</h1><p>{session?"Konu anlatımı, çözümlü sorular ve kişisel öğrenme analizi.":page==="home"?"Her gün 3 saat. Her hafta yeni bir adım.":"Hedefin için hazırlanan çalışma sistemin."}</p></div><div className="header-actions"><span className="date-chip"><MiniIcon name="calendar"/>{prettyDate(today)}</span><span className="target-chip">EA · 2027</span><span className="account-chip" title={user.email}>{user.email}</span></div></header>
+   {loadError?<div className="panel load-error"><h2>Çalışma kayıtların yüklenemedi</h2><p>{loadError}</p><p>Supabase bağlantısını ve <code>study_progress</code> tablosunun güvenlik kurallarını kontrol et. Veriler kaybolmasın diye çalışma ekranını açmıyoruz.</p><button className="btn primary" onClick={()=>window.location.reload()}>Tekrar dene</button></div>:!hydrated?<div className="panel empty">Çalışma verilerin buluttan yükleniyor…</div>:session? <section className="session-wrap">
     <div className="session-bar"><button className="back-link" onClick={()=>{if(window.confirm("Oturumu kapatırsan ilerleyen soruların bu oturum için kaydedilmez. Devam?"))setSession(null)}}><MiniIcon name="back"/> Çalışmaya dön</button><div className="session-meta"><span><MiniIcon name="clock"/>{session.examType?formatDuration(timeLeft)+" kaldı":formatDuration(elapsed)}</span><b>{session.step==="learn"?"Konu anlatımı":session.step==="result"?"Tamamlandı":(session.index+1)+"/"+questionTotal+" soru"}</b></div></div>
     {session.step==="learn"&&activeTopic?<div className="lesson-layout">
       <article className="panel lesson-panel"><div className="subject-tag">{getCourse(activeTopic.courseId).label}</div><h2>{activeTopic.title}</h2><p className="intro">{activeTopic.summary}</p><h3>Konunun temel kuralları</h3><div className="lesson-principles">{activeTopic.principles.map((line,i)=><div key={i} className="principle"><span>{i+1}</span><p>{line}</p></div>)}</div><h3>Adım adım çözümlü örnek</h3><div className="example"><strong>{activeTopic.worked}</strong><div className="example-solution"><span>ÇÖZÜM</span><p>{activeTopic.solution}</p></div></div><h3>Sınavda dikkat edilecekler</h3><p>Önce sorunun ne istediğini belirle. Tanımı ezberlemek yerine verilenleri adım adım kullan. İşlem ve yorum hatası yaparsan hatanın hangi basamakta başladığını not al. Çözümü tekrar kapatıp kendin yap.</p><div className="lesson-actions"><button className="btn ghost" onClick={()=>window.print()}>Yazdır / PDF kaydet</button><button className="btn primary" onClick={()=>setSession(s=>s?{...s,step:"quiz",startedAt:Date.now(),questionStartedAt:Date.now()}:s)}><MiniIcon name="play"/> Teste geç · {session.questions.length} soru</button></div></article>
@@ -128,9 +186,10 @@ export default function Home(){
     {page==="calendar"&&<div className="panel calendar-page"><div className="section-heading"><div><span className="eyebrow">19 EKİM 2026 – 20 HAZİRAN 2027</span><h2>35 haftalık hazırlık programı</h2><p>Haftada 6 gün, günde 4×45 dakika net çalışma. Çarşamba tekrar, cumartesi deneme.</p></div></div><div className="week-rule">{weekDays.map((d,i)=><div key={d}><b>{d}</b><span>{i===6?"Dinlenme":i===5?"Deneme + analiz":i===2?"Eksik pekiştirme":"Konu + test"}</span></div>)}</div><div className="week-grid">{monthPlan(progress).map(w=><div key={w.week} className={"week-box "+(w.week===currentWeek(day)?"current":"")}><span>HAFTA {String(w.week).padStart(2,"0")}</span><strong>{new Date(w.from+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"short"})}</strong><small>{w.week===currentWeek(day)?"Şu anki haftan":"4 günlük oturum / başlangıç günü"}</small></div>)}</div><div className="info-banner">Bu plan 2027 YKS takvimi kesinleşmediği için yaklaşık bitiş tarihiyle hazırlandı. Gerekirse son haftanın tarihi düzenlenmelidir.</div></div>}
     {page==="exams"&&<><div className="exam-grid">{[{type:"Mini" as const,title:"Haftalık mini deneme",count:30,time:"45 dakika",info:"TYT ve AYT konularından karışık, hızlı tarama."},{type:"TYT" as const,title:"TYT genel deneme",count:120,time:"165 dakika",info:"Türkçe 40, sosyal 20, matematik 40, fen 20 dağılımı."},{type:"AYT" as const,title:"AYT eşit ağırlık",count:80,time:"180 dakika",info:"Matematik 40, edebiyat 24, tarih-1 10, coğrafya-1 6."}].map(e=><div key={e.type} className="panel exam-card"><span className="eyebrow">{e.type==="Mini"?"KISA TARAMA":e.type+" GENEL DENEME"}</span><h2>{e.title}</h2><p>{e.info}</p><div className="exam-stats"><span><b>{e.count}</b> soru</span><span><b>{e.time}</b></span></div><button className="btn primary" onClick={()=>startExam(e.type)}>Denemeyi başlat <MiniIcon name="arrow"/></button></div>)}</div><div className="panel history-panel"><div className="section-heading"><h2>Deneme geçmişin</h2></div>{progress.exams.length?progress.exams.slice().reverse().map(e=><div className="history-row" key={e.id}><span>{e.track} · {new Date(e.at).toLocaleDateString("tr-TR")}</span><strong>{e.net} net</strong><small>{e.correct} D · {e.incorrect} Y · {e.empty} B</small></div>):<p className="muted">Henüz deneme çözmedin. İlk denemenden sonra sonuçlar burada saklanır.</p>}</div><div className="info-banner">Bu denemeler özgün alıştırma sorularından oluşturulmuştur. Resmî ÖSYM denemesi ya da gerçek sınav puanı hesaplayıcısı değildir.</div></>}
     {page==="analytics"&&<><div className="metric-grid"><div className="metric"><span>TOPLAM SORU</span><strong>{answeredCount}</strong></div><div className="metric"><span>DOĞRULUK</span><strong>%{accuracy}</strong></div><div className="metric"><span>PEKİŞTİRME</span><strong>{due.length}</strong><small>tekrarlanması gereken konu</small></div><div className="metric"><span>DENEMELER</span><strong>{progress.exams.length}</strong></div></div><div className="analytics-grid"><div className="panel"><div className="section-heading"><h2>Derslere göre başarı</h2></div><div className="bars">{statsByCourse.map(c=><div className="barrow" key={c.id}><div><b>{c.label}</b><span>{c.attempted}/{c.count} konu · %{c.percent}</span></div><div className="bar-track"><div style={{width:c.percent+"%",background:c.color}}/></div></div>)}</div></div><div className="panel"><div className="section-heading"><h2>Öncelikli tekrar listesi</h2></div>{weak.length?weak.slice(0,12).map(t=><div className="weak-item" key={t.id}><div><strong>{t.title}</strong><span>{getCourse(t.courseId).label} · %{topicStats(progress,t.id).accuracy} doğru</span></div><button className="small-btn" onClick={()=>startTopic(t,undefined,"tekrar")}>Pekiştir</button></div>):<p className="muted">Yeterli yanlış verisi olduğunda zorlandığın konuları burada göreceksin. Üç veya daha fazla yanıtla değerlendirme başlar.</p>}</div></div></>}
-    {page==="settings"&&<div className="settings-grid"><div className="panel settings-card"><span className="eyebrow">VERİ GÜVENLİĞİ</span><h2>İlerlemen bu cihazda saklanır</h2><p>Hesap açmak gerekmez. Kayıtlar tarayıcının yerel depolama alanına yazılır. Farklı cihazlar arasında otomatik eşitleme yapılmaz. Düzenli yedek almanı öneririz.</p><div className="settings-actions"><button className="btn primary" onClick={exportData}>İlerleme yedeğini indir</button><label className="btn outline upload-btn">JSON yedeği yükle<input type="file" accept=".json,application/json" onChange={importData}/></label></div>{notice?<div className="info-banner">{notice}</div>:null}</div><div className="panel settings-card"><span className="eyebrow">KİŞİSEL HEDEF</span><h2>Akdeniz Üniversitesi · Psikoloji</h2><dl><dt>Hedef sıralama</dt><dd>EA ilk 35.000</dd><dt>Günlük net çalışma</dt><dd>180 dakika</dd><dt>Program başlangıcı</dt><dd>19 Ekim 2026</dd><dt>Plan bitişi</dt><dd>20 Haziran 2027 (tahmini)</dd><dt>İçerik</dt><dd>{TOPICS.length} konu · {COURSES.length} ders</dd></dl><button className="btn danger" onClick={resetData}>Tüm ilerlemeyi sıfırla</button></div><div className="panel settings-card"><span className="eyebrow">İÇERİK HAKKINDA</span><h2>Özgün ders arşivi</h2><p>Tüm ders başlıkları, temel anlatımlar, çözümlü örnekler ve konu testleri uygulama içine eklenmiştir. Matematik sorularının bir kısmı sayıları değişen üretilebilir sorulardır. Diğer sorular konu kazanımları ve örnekler üzerinden oluşturulur. Yayımlanmış ÖSYM sorularının birebir kopyaları bulunmaz.</p><p>Bu başlangıç arşivi tam kapsamlı, editör denetiminden geçmiş sınav kitabı yerine geçmez. Konu anlatımlarının derinliği ve soru çeşitliliği derslere göre değişir; öğrenmede ana kaynağa ve resmî müfredata da başvur.</p><a href="https://www.osym.gov.tr" target="_blank" rel="noreferrer" className="text-link">ÖSYM resmî sitesi <MiniIcon name="arrow"/></a></div></div>}
+    {page==="settings"&&<div className="settings-grid"><div className="panel settings-card"><span className="eyebrow">BULUT SENKRONİZASYONU</span><h2>Hesabın her cihazda seninle</h2><p>Oturumun açık kalır ve çalışma kayıtların kişisel hesabına kaydedilir. Başka cihazda aynı e-posta ve şifreyle kaldığın yerden devam edebilirsin. Aynı anda iki cihazda ayrı test çözmek kayıt çakışmasına yol açabilir.</p><div className="info-banner">Hesap: {user.email}<br/>Kayıt durumu: {syncStatus==="saved"?"Bulutla eşitlendi":syncStatus==="saving"?"Kaydediliyor":"Yükleniyor"}</div><div className="settings-actions"><button className="btn primary" onClick={exportData}>İlerleme yedeğini indir</button><label className="btn outline upload-btn">JSON yedeği yükle<input type="file" accept=".json,application/json" onChange={importData}/></label></div>{notice?<div className="info-banner">{notice}</div>:null}</div><div className="panel settings-card"><span className="eyebrow">KİŞİSEL HEDEF</span><h2>Akdeniz Üniversitesi · Psikoloji</h2><dl><dt>Hedef sıralama</dt><dd>EA ilk 35.000</dd><dt>Günlük net çalışma</dt><dd>180 dakika</dd><dt>Program başlangıcı</dt><dd>19 Ekim 2026</dd><dt>Plan bitişi</dt><dd>20 Haziran 2027 (tahmini)</dd><dt>İçerik</dt><dd>{TOPICS.length} konu · {COURSES.length} ders</dd></dl><button className="btn danger" onClick={resetData}>Tüm ilerlemeyi sıfırla</button><button className="btn outline signout-btn" onClick={()=>void logout()}>Hesaptan çıkış yap</button></div><div className="panel settings-card"><span className="eyebrow">İÇERİK HAKKINDA</span><h2>Özgün ders arşivi</h2><p>Tüm ders başlıkları, temel anlatımlar, çözümlü örnekler ve konu testleri uygulama içine eklenmiştir. Matematik sorularının bir kısmı sayıları değişen üretilebilir sorulardır. Diğer sorular konu kazanımları ve örnekler üzerinden oluşturulur. Yayımlanmış ÖSYM sorularının birebir kopyaları bulunmaz.</p><p>Bu başlangıç arşivi tam kapsamlı, editör denetiminden geçmiş sınav kitabı yerine geçmez. Konu anlatımlarının derinliği ve soru çeşitliliği derslere göre değişir; öğrenmede ana kaynağa ve resmî müfredata da başvur.</p><a href="https://www.osym.gov.tr" target="_blank" rel="noreferrer" className="text-link">ÖSYM resmî sitesi <MiniIcon name="arrow"/></a></div></div>}
    </>}
-   <footer className="footer"><span>YKS Akademi 2027 · Kişisel çalışma platformu</span><span>ÖSYM ile bağlantılı resmî bir hizmet değildir.</span></footer>
+   {syncError?<div className="info-banner sync-warning" role="alert">Buluta kaydetme hatası: {syncError} <button className="small-btn" onClick={()=>setRetrySave(x=>x+1)}>Tekrar kaydet</button></div>:null}
+   <footer className="footer"><span>YKS Akademi 2027 · {syncStatus==="saving"?"Buluta kaydediliyor…":syncStatus==="saved"?"Bulutta kayıtlı":"Yükleniyor…"}</span><span>ÖSYM ile bağlantılı resmî bir hizmet değildir.</span></footer>
   </main>
   {!session&&<nav className="mobile-nav">{menus.slice(0,5).map(m=><button key={m.id} className={page===m.id?"active":""} onClick={()=>nav(m.id)}><MiniIcon name={m.icon}/><small>{m.text.split(" ")[0]}</small></button>)}</nav>}
  </div>
