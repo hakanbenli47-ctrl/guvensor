@@ -40,6 +40,7 @@ function Dashboard({user}:{user:User}){
  const [session,setSession]=useState<Session|null>(null);
  const [drafts,setDrafts]=useState<DraftCollection>({});
  const [showAllMakeups,setShowAllMakeups]=useState(false);
+ const [showAllAttention,setShowAllAttention]=useState(false);
  const [now,setNow]=useState(Date.now());
  const [examReport,setExamReport]=useState<{correct:number;incorrect:number;empty:number;net:number;track:string}|null>(null);
  const [notice,setNotice]=useState("");
@@ -138,6 +139,7 @@ function Dashboard({user}:{user:User}){
  const day=selectedDate(today);
  const plan=useMemo(()=>dailyPlan(day,progress),[day,progress]);
  const makeups=useMemo(()=>missedBlocks(today,progress),[today,progress]);
+ const pendingDrafts=Object.entries(drafts).sort((a,b)=>(b[1].pausedAt||b[1].startedAt)-(a[1].pausedAt||a[1].startedAt));
  const weak=useMemo(()=>weakTopics(progress),[progress]);
  const due=useMemo(()=>dueTopics(progress),[progress]);
  const current=plan.find(b=>!progress.finished[b.id])||plan[0];
@@ -156,27 +158,57 @@ function Dashboard({user}:{user:User}){
  const timeLeft=Math.max(0,examTimeLimit-elapsed);
  const questionTotal=session?.questions.length||0;
  const answered=session?Object.keys(session.selected).length:0;
- function pauseLesson(){setSession(s=>s?{...s,pausedAt:Date.now()}:s);setSessionHidden(true);}
- function resumeLesson(){
-  setSession(s=>s?{...s,startedAt:s.startedAt+(s.pausedAt?Date.now()-s.pausedAt:0),questionStartedAt:s.questionStartedAt+(s.pausedAt?Date.now()-s.pausedAt:0),pausedAt:undefined}:s);
-  setSessionHidden(false);setPage("home");
+ function parkCurrent(nextPage:Page="home"){
+  if(session&&session.step!=="result"){
+   const saved=freezeDraft(session);
+   setDrafts(prev=>({...prev,[draftKey(saved)]:saved}));
+  }
+  setSession(null);setExamReport(null);setPage(nextPage);
  }
- function okayToReplaceSession(){return !session||session.step==="result"||window.confirm("Yarım kalan bir oturumun var. Yeni bir oturum başlatırsan mevcut yarım oturumun kaydı silinecek. Devam edilsin mi?");}
- function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
-  if(!okayToReplaceSession())return;
-  setSessionHidden(false);
-  const n=progress.answers.filter(a=>a.topicId===topic.id).length;
-  setSession({questions:makeQuiz(topic,mode==="tekrar"?15:12,n),step:"learn",index:0,selected:{},mode,topicId:topic.id,blockId:block?.id,startedAt:Date.now(),questionStartedAt:Date.now()});
+ function pauseLesson(){parkCurrent("home");}
+ function openDraft(key:string){
+  const existing=drafts[key];
+  if(!existing)return;
+  if(session&&session.step!=="result"&&draftKey(session)!==key){
+   const parked=freezeDraft(session);
+   setDrafts(prev=>{
+    const updated={...prev,[draftKey(parked)]:parked};
+    delete updated[key];return updated;
+   });
+  }else{
+   setDrafts(prev=>{const updated={...prev};delete updated[key];return updated;});
+  }
+  setSession(resumeDraft(existing));setExamReport(null);setPage("home");
+ }
+ function launchSession(next:Session){
+  const key=draftKey(next);
+  // Switching between lessons/assessments never destroys another unfinished session.
+  if(session&&session.step!=="result"){
+   if(draftKey(session)===key){setPage("home");return;}
+   const parked=freezeDraft(session);
+   setDrafts(prev=>{
+    const updated={...prev,[draftKey(parked)]:parked};
+    if(drafts[key])delete updated[key];
+    return updated;
+   });
+  }else if(drafts[key]){
+   setDrafts(prev=>{const updated={...prev};delete updated[key];return updated;});
+  }
+  const existing=drafts[key];
+  setSession(existing?resumeDraft(existing):next);
   setExamReport(null);setPage("home");
+ }
+ function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
+  const n=progress.answers.filter(a=>a.topicId===topic.id).length;
+  launchSession({questions:makeQuiz(topic,mode==="tekrar"?15:12,n),step:"learn",index:0,selected:{},mode,topicId:topic.id,blockId:block?.id,startedAt:Date.now(),questionStartedAt:Date.now()});
  }
  function startExam(track:"Mini"|"TYT"|"AYT",block?:StudyBlock){
-  if(!okayToReplaceSession())return;
-  setSessionHidden(false);
   const seed=progress.exams.length+1;
-  setSession({questions:makeExam(track,seed),step:"quiz",index:0,selected:{},mode:"deneme",blockId:block?.id,examType:track,startedAt:Date.now(),questionStartedAt:Date.now()});
-  setExamReport(null);setPage("home");
+  launchSession({questions:makeExam(track,seed),step:"quiz",index:0,selected:{},mode:"deneme",blockId:block?.id,examType:track,startedAt:Date.now(),questionStartedAt:Date.now()});
  }
- function startPlacement(){if(!okayToReplaceSession())return;setSessionHidden(false);setSession({questions:PLACEMENT,step:"quiz",index:0,selected:{},mode:"deneme",examType:"Seviye",startedAt:Date.now(),questionStartedAt:Date.now()});setExamReport(null);setPage("home");}
+ function startPlacement(){
+  launchSession({questions:PLACEMENT,step:"quiz",index:0,selected:{},mode:"deneme",examType:"Seviye",startedAt:Date.now(),questionStartedAt:Date.now()});
+ }
  function startBlock(block:StudyBlock){
   if(block.type==="deneme"){startExam("Mini",block);return;}
   const t=getTopic(block.topicId||"");if(t)startTopic(t,block,block.type==="tekrar"?"tekrar":"ders");
@@ -190,6 +222,7 @@ function Dashboard({user}:{user:User}){
   const date=dateKey();
   const assessment=s.examType==="Seviye"?calculatePlacement(s.selected):null;
   setProgress(prev=>({...prev,answers:[...prev.answers,...records],exams:s.examType?[...prev.exams,{id:crypto.randomUUID(),track:s.examType,at:new Date().toISOString(),correct,incorrect,empty,net:report.net,seconds:Math.floor((Date.now()-s.startedAt)/1000)}]:prev.exams,minutes:{...prev.minutes,[date]:(prev.minutes[date]||0)+minutes},finished:s.blockId?{...prev.finished,[s.blockId]:new Date().toISOString()}:prev.finished,activeTopicId:s.topicId,placement:assessment?{completedAt:new Date().toISOString(),correct:assessment.correct,incorrect:assessment.incorrect,empty:assessment.empty,area:assessment.area}:prev.placement}));
+  setDrafts(prev=>{const next={...prev};delete next[draftKey(s)];return next;});
   setSession({...s,step:"result"});
  }
  useEffect(()=>{if(session?.step==="quiz"&&session.examType&&timeLeft===0)finish(session);/* time triggered, do not restart timer */},[session?.step,session?.examType,timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -198,9 +231,9 @@ function Dashboard({user}:{user:User}){
   if(!session)return;
   if(session.index+1===session.questions.length){finish(session)}else setSession({...session,index:session.index+1,questionStartedAt:Date.now()});
  }
- function nav(next:Page){setPage(next);setNotice("");}
+ function nav(next:Page){if(session)parkCurrent(next);else setPage(next);setNotice("");}
  function resetData(){
-  if(window.confirm("Tüm kişisel ilerleme ve denemeler bu tarayıcıdan silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setSession(null);setSessionHidden(false);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
+  if(window.confirm("Tüm hesap ilerlemen, yarım derslerin ve denemelerin silinsin mi? Bu işlem geri alınamaz.")){setProgress(EMPTY);setDrafts({});setSession(null);setExamReport(null);setNotice("Çalışma kayıtların sıfırlandı.")}
  }
  function exportData(){
   const payload=JSON.stringify({version:1,exportedAt:new Date().toISOString(),progress},null,2);
@@ -212,7 +245,7 @@ function Dashboard({user}:{user:User}){
   const f=event.target.files?.[0];if(!f)return;
   try{const obj=JSON.parse(await f.text());if(!obj.progress||!Array.isArray(obj.progress.answers))throw Error("Geçersiz dosya");
    if(!window.confirm("Yedekteki ilerleme mevcut kayıtların yerine geçecek. Devam edilsin mi?"))return;
-   setProgress(safeState(obj.progress));setSession(null);setSessionHidden(false);setNotice("Yedek başarıyla yüklendi.");
+   setProgress(safeState(obj.progress));setDrafts({});setSession(null);setNotice("Yedek başarıyla yüklendi.");
   }catch{setNotice("Yedek dosyası geçersiz.")}
   event.target.value="";
  }
