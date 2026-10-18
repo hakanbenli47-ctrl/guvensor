@@ -53,7 +53,7 @@ function Dashboard({user}:{user:User}){
   if(!client){setLoadError("Bulut bağlantısı yapılandırılmadı.");return;}
   async function load(){
    try{
-    const {data,error}=await client!.from(PROGRESS_TABLE).select("payload").eq("user_id",user.id).maybeSingle();
+    const {data,error}=await client!.from(PROGRESS_TABLE).select("payload,updated_at").eq("user_id",user.id).maybeSingle();
     if(!alive)return;
     if(error)throw error;
     let incoming:StudyState=EMPTY,restored:Session|null=null;
@@ -73,7 +73,7 @@ function Dashboard({user}:{user:User}){
       }catch{}
     }
     if(!alive)return;
-    setProgress(incoming);setSession(restored?{...restored,pausedAt:restored.pausedAt??Date.now()}:null);setSessionHidden(Boolean(restored));setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
+    setProgress(incoming);setSession(restored?{...restored,pausedAt:restored.pausedAt??(data?.updated_at?new Date(data.updated_at).getTime():Date.now())}:null);setSessionHidden(Boolean(restored));setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
    }catch(err){if(alive)setLoadError(err instanceof Error?err.message:"Çalışma verilerin buluttan yüklenemedi.");}
   }
   void load();
