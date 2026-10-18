@@ -2,7 +2,8 @@ import type {Question} from "./study";
 import {TOPICS, type CourseId} from "./curriculum";
 
 type Entry={course:CourseId;contains:string;prompt:string;answers:[string,string,string,string,string];correct:0|1|2|3|4;why:string;level:"Kolay"|"Orta"|"Zor"};
-const items:Entry[]=[
+type Raw=[CourseId,string,string,[string,string,string,string,string],0|1|2|3|4,string,"Kolay"|"Orta"|"Zor"];
+const entries:Raw[]=[
 ["tyt-mat","Temel kavramlar","8 - 2 × (3 - 7) işleminin sonucu kaçtır?",["0","16","-16","-8","14"],1,"Parantez içi -4; 2×(-4)=-8; 8-(-8)=16.","Kolay"],
 ["tyt-mat","Temel kavramlar","a negatif tam sayı ve b pozitif çift sayıysa aşağıdakilerden hangisi kesinlikle pozitiftir?",["a×b","a-b","a²+b","a³","a"],2,"a² sıfırdan büyüktür; b de pozitif olduğundan toplam pozitiftir.","Orta"],
 ["tyt-mat","Rasyonel","2/3 - 1/4 işleminin sonucu kaçtır?",["1/12","5/12","1/2","7/12","3/7"],1,"Ortak payda 12: 8/12-3/12=5/12.","Kolay"],
@@ -39,7 +40,8 @@ const items:Entry[]=[
 ["ayt-edebiyat","Tanzimat 1.","‘İntibah’ romanının yazarı kimdir?",["Şinasi","Namık Kemal","Recaizade Mahmut Ekrem","Abdülhak Hamit","Halit Ziya"],1,"İntibah, Namık Kemal'in romanıdır.","Kolay"],
 ["ayt-edebiyat","Servetifünun","‘Aşk-ı Memnu’ romanı hangi yazara aittir?",["Ahmet Mithat","Hüseyin Rahmi","Halit Ziya Uşaklıgil","Yakup Kadri","Peyami Safa"],2,"Aşk-ı Memnu, Halit Ziya Uşaklıgil'indir.","Kolay"],
 ["ayt-edebiyat","Cumhuriyet şiiri","Aşağıdakilerden hangisi Garip akımının şairlerindendir?",["Ahmet Haşim","Orhan Veli Kanık","Tevfik Fikret","Mehmet Akif","Cahit Sıtkı"],1,"Garip hareketinin üç kurucusundan biri Orhan Veli Kanık'tır.","Orta"]
-].map(([course,contains,prompt,answers,correct,why,level])=>({course,contains,prompt,answers,correct,why,level})) as Entry[];
+];
+const items:Entry[]=entries.map(([course,contains,prompt,answers,correct,why,level])=>({course,contains,prompt,answers,correct,why,level}));
 const byTopic=(course:CourseId,contains:string)=>TOPICS.find(t=>t.courseId===course&&t.title.toLocaleLowerCase("tr-TR").includes(contains.toLocaleLowerCase("tr-TR")));
 export const PLACEMENT:Question[]=items.map((item,i)=>{
  const topic=byTopic(item.course,item.contains);
@@ -51,8 +53,6 @@ export function calculatePlacement(answers:Record<number,number>){
  let correct=0,incorrect=0,empty=0;
  const area:{[key:string]:{correct:number;total:number}}={};
  PLACEMENT.forEach((q,i)=>{
-  const c=byTopic(q.topicId.split("-").slice(0,2).join("-") as CourseId,""); 
-  void c;
   const course=q.topicId.startsWith("tyt-mat")?"TYT Matematik":q.topicId.startsWith("tyt-turkce")?"TYT Türkçe":q.topicId.startsWith("ayt-mat")?"AYT Matematik":"AYT Edebiyat";
   area[course]??={correct:0,total:0};area[course].total++;
   if(answers[i]===undefined)empty++;else if(answers[i]===q.answer){correct++;area[course].correct++;}else incorrect++;
