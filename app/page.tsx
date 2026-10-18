@@ -15,7 +15,7 @@ const prettyDate=(iso:string)=>new Date(iso+"T12:00:00").toLocaleDateString("tr-
 const weekDays=["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"];
 const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(value,max));
 function lessonClock(start:string|undefined,slot:number){
- if(!start||!/^\\d{2}:\\d{2}$/.test(start))return null;
+ if(!start||!/^[0-9]{2}:[0-9]{2}$/.test(start))return null;
  const [h,m]=start.split(":").map(Number);
  const mins=(h*60+m+slot*55)%1440;
  const end=(mins+45)%1440;
