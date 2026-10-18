@@ -5,11 +5,12 @@ import AccountGate from "../components/AccountGate";
 import {supabase,PROGRESS_TABLE} from "../lib/cloud";
 import {PLACEMENT,calculatePlacement,PLACEMENT_TIME_MINUTES} from "../lib/placement";
 import {detailed,DETAILED_LESSON_COUNT} from "../lib/deep-lessons";
+import {combinedDrafts,draftKey,freezeDraft,resumeDraft,safeDraftCollection,validDraft,sessionDescription,type StudySession,type DraftCollection} from "../lib/session-drafts";
 import {COURSES,TOPICS,getTopic,getCourse,topicsByCourse,type CourseId,type Topic} from "../lib/curriculum";
 import {EMPTY,END_DATE,START_DATE,completionPercent,currentWeek,dailyPlan,missedBlocks,dateKey,dueTopics,formatDuration,makeExam,makeQuiz,monthPlan,selectedDate,topicStats,weakTopics,type Question,type StudyBlock,type StudyState,type AnswerRecord} from "../lib/study";
 type Page="home"|"subjects"|"calendar"|"exams"|"analytics"|"settings";
 type Mode="ders"|"tekrar"|"deneme";
-type Session={questions:Question[];step:"learn"|"quiz"|"result";index:number;selected:Record<number,number>;mode:Mode;topicId?:string;blockId?:string;examType?:"Mini"|"TYT"|"AYT"|"Seviye";startedAt:number;questionStartedAt:number;pausedAt?:number;lessonSection?:number;};
+type Session=StudySession;
 const STORAGE="yks-koc-2027-progress-v1", SESSION="yks-koc-2027-session-v1";
 const prettyDate=(iso:string)=>new Date(iso+"T12:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric",weekday:"long"});
 const weekDays=["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"];
@@ -37,7 +38,7 @@ function Dashboard({user}:{user:User}){
  const [course,setCourse]=useState<CourseId>("tyt-mat");
  const [search,setSearch]=useState("");
  const [session,setSession]=useState<Session|null>(null);
- const [sessionHidden,setSessionHidden]=useState(false);
+ const [drafts,setDrafts]=useState<DraftCollection>({});
  const [showAllMakeups,setShowAllMakeups]=useState(false);
  const [now,setNow]=useState(Date.now());
  const [examReport,setExamReport]=useState<{correct:number;incorrect:number;empty:number;net:number;track:string}|null>(null);
@@ -47,6 +48,8 @@ function Dashboard({user}:{user:User}){
  const [syncStatus,setSyncStatus]=useState<"loading"|"saving"|"saved">("loading");
  const [retrySave,setRetrySave]=useState(0);
  const saveQueue=useRef<Promise<void>>(Promise.resolve());
+ const saveRevision=useRef(0);
+ const localCacheKey="guvensor-autosave-v2:"+user.id;
  useEffect(()=>{
   let alive=true;
   const client=supabase;
@@ -56,24 +59,43 @@ function Dashboard({user}:{user:User}){
     const {data,error}=await client!.from(PROGRESS_TABLE).select("payload,updated_at").eq("user_id",user.id).maybeSingle();
     if(!alive)return;
     if(error)throw error;
-    let incoming:StudyState=EMPTY,restored:Session|null=null;
-    if(data?.payload && typeof data.payload==="object"){
-      const payload=data.payload as {progress?:unknown;session?:unknown};
+    let incoming:StudyState=EMPTY,restoredDrafts:DraftCollection={};
+    const serverSavedAt=data?.updated_at?new Date(data.updated_at).getTime():0;
+    if(data?.payload&&typeof data.payload==="object"){
+      const payload=data.payload as {progress?:unknown;session?:unknown;drafts?:unknown};
       incoming=safeState(payload.progress);
-      const old=payload.session as Session|null;
-      if(old&&Array.isArray(old.questions)&&old.questions.length&&old.step!=="result")restored=old;
+      restoredDrafts=safeDraftCollection(payload.drafts,serverSavedAt||Date.now());
+      // Older cloud records had only one unfinished session. Never discard it.
+      if(validDraft(payload.session)){
+       const old=freezeDraft(payload.session,payload.session.pausedAt??(serverSavedAt||Date.now()));
+       if(!restoredDrafts[draftKey(old)])restoredDrafts[draftKey(old)]=old;
+      }
     }else{
       try{
         const legacy=localStorage.getItem(STORAGE);
         if(legacy&&window.confirm("Bu cihazdaki eski çalışma kayıtlarını hesabına aktarmak ister misin?")){
           incoming=safeState(JSON.parse(legacy));
           const raw=localStorage.getItem(SESSION);
-          if(raw){const previous=JSON.parse(raw) as Session;if(previous?.questions?.length&&previous.step!=="result")restored=previous;}
+          if(raw){
+           const previous=JSON.parse(raw);
+           if(validDraft(previous)){const old=freezeDraft(previous);restoredDrafts[draftKey(old)]=old;}
+          }
         }
       }catch{}
     }
+    // Restore changes that were recorded locally just before the device closed,
+    // but whose cloud save did not finish. User account IDs isolate this cache.
+    try {
+      const local=JSON.parse(localStorage.getItem(localCacheKey)||"null") as
+       {pending?:boolean;savedAt?:number;payload?:{progress?:unknown;drafts?:unknown}}|null;
+      if(local?.pending&&local.payload&&typeof local.savedAt==="number"&&local.savedAt>serverSavedAt){
+       incoming=safeState(local.payload.progress);
+       restoredDrafts=safeDraftCollection(local.payload.drafts,local.savedAt);
+      }
+    }catch{}
     if(!alive)return;
-    setProgress(incoming);setSession(restored?{...restored,pausedAt:restored.pausedAt??(data?.updated_at?new Date(data.updated_at).getTime():Date.now())}:null);setSessionHidden(Boolean(restored));setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
+    setProgress(incoming);setDrafts(restoredDrafts);setSession(null);
+    setToday(dateKey());setHydrated(true);setLoadError("");setSyncStatus("saved");
    }catch(err){if(alive)setLoadError(err instanceof Error?err.message:"Çalışma verilerin buluttan yüklenemedi.");}
   }
   void load();
@@ -81,22 +103,35 @@ function Dashboard({user}:{user:User}){
  },[user.id]);
  useEffect(()=>{
   if(!hydrated||!supabase)return;
-  const client=supabase,payload={version:1,progress,session:session?.step==="result"?null:session};
+  const client=supabase;
+  const snapshot={version:2,progress,drafts:combinedDrafts(drafts,session),session:null};
+  const revision=++saveRevision.current;
+  const savedAt=Date.now();
+  // Immediate on-device crash recovery: no manual save action needed.
+  try{localStorage.setItem(localCacheKey,JSON.stringify({pending:true,savedAt,payload:snapshot}));}catch{}
   setSyncStatus("saving");
   const timer=setTimeout(()=>{
     saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{
-      const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+      const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload:snapshot,updated_at:new Date().toISOString()},{onConflict:"user_id"});
       if(error)throw error;
     });
-    void saveQueue.current.then(()=>{setSyncStatus("saved");setSyncError("");}).catch(err=>setSyncError(err instanceof Error?err.message:"Buluta kaydedilemedi."));
-  },400);
+    void saveQueue.current.then(()=>{
+      if(revision!==saveRevision.current)return;
+      setSyncStatus("saved");setSyncError("");
+      try{localStorage.setItem(localCacheKey,JSON.stringify({pending:false,savedAt,payload:snapshot}));}catch{}
+    }).catch(err=>{
+      if(revision===saveRevision.current)setSyncError(err instanceof Error?err.message:"Buluta kaydedilemedi.");
+    });
+  },250);
   return()=>clearTimeout(timer);
- },[progress,session,hydrated,user.id,retrySave]);
+ },[progress,drafts,session,hydrated,user.id,retrySave,localCacheKey]);
  async function logout(){
   if(!supabase)return;
   await saveQueue.current.catch(()=>undefined);
-  const {error}=await supabase.from(PROGRESS_TABLE).upsert({user_id:user.id,payload:{version:1,progress,session:session?.step==="result"?null:session},updated_at:new Date().toISOString()},{onConflict:"user_id"});
+  const payload={version:2,progress,drafts:combinedDrafts(drafts,session),session:null};
+  const {error}=await supabase.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
   if(error){setSyncError("Çıkış öncesi kayıt başarısız: "+error.message);return;}
+  try{localStorage.setItem(localCacheKey,JSON.stringify({pending:false,savedAt:Date.now(),payload}));}catch{}
   await supabase.auth.signOut();
  }
  useEffect(()=>{const timer=setInterval(()=>{setNow(Date.now());setToday(dateKey())},1000);return()=>clearInterval(timer)},[]);
