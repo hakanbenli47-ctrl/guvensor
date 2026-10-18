@@ -1,11 +1,13 @@
 # Şifreli giriş ve bulut senkronizasyonu
 
-Önce Supabase projesi açılmalı. Bu dosyadaki ayarların bir kısmı **kullanıcı tarafından** Supabase / Vercel panellerinde uygulanır; GitHub'a gizli anahtar koyma.
+Supabase projesi **YKS Akademi 2027** (ref: `urrfjzrbnpwylejyowls`, `eu-central-1`) açıldı, `study_progress` tablosu ve kullanıcı bazlı RLS kuralları 18 Ekim 2026'da migration ile etkinleştirildi. Vercel `guvensor` projesinde URL, anon ve publishable key değişkenleri production + preview için ayarlandı. Değişkenlerin değerlerini GitHub'a koyma.
+
+**Kalan zorunlu manuel işlem:** Supabase Authentication > URL Configuration kısmında Site URL = `https://guvensor.vercel.app` ve Redirect URLs listesinde `https://guvensor.vercel.app/**` bulunmalıdır. Yönetim bağlantısı bu işlem için yeterli yetkiyi sunmadığından mevcut ayarın otomatik değiştirildiği iddia edilmemelidir. Auth e-posta şablonlarını ve SMTP durumunu da kontrol et.
 
 ## 1. Supabase
 
 - Yeni / mevcut Supabase projesinde **Authentication > Providers > Email** alanında e-posta/şifre yöntemi etkin olmalı. E-posta doğrulamasını açık tut.
-- **SQL Editor** içinde `supabase/schema.sql` dosyasının tamamını çalıştır. Bu dosya `study_progress` tablosunu açar ve RLS yetkilerini yalnızca oturumdaki kullanıcıya verir.
+- Veritabanı şeması **oluşturuldu ve RLS doğrulandı.** Yeniden çalıştırmak normalde gerekmez. Şema kaynak kodu `supabase/schema.sql` dosyasındadır.
 - **Authentication > URL Configuration** alanında Site URL'yi, Vercel alan adını ve Redirect URLs listesine `https://guvensor.vercel.app/**` adresini ekle. Önizleme adresleri için ayrıca izin ver.
 - Gerçek e-posta gönderimi için production SMTP ayarlarını kontrol et. Supabase'in geliştirme sınırlamalarına takılmamak için uygun SMTP gerekir.
 - Parola kurtarma bağlantısından gelen kullanıcı yeni parola belirlemek için uygulamanın kurtarma ekranına yönlendirilir.
@@ -20,7 +22,7 @@ Vercel projesi `guvensor` altında **Settings > Environment Variables**:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase publishable/anon key |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Alternatif publishable key. Varsa anon key yerine bu kullanılır. |
 
-Her iki anahtar değişkenini eklemek zorunlu değildir: URL + **iki anahtardan biri** yeterlidir. Değişkenleri Production ve Preview ortamlarına ekle. Değişiklikten sonra yeniden dağıt (Redeploy). **Kesinlikle service_role veya secret key kullanma.**
+Her iki anahtar değişkenini eklemek zorunlu değildir: URL + **iki anahtardan biri** yeterlidir. Değişkenleri Production ve Preview ortamlarına ekle. 18 Ekim 2026'da değişkenler yeni proje için yenilendi; bundan sonra alınacak yeni bir deploy bunları kullanır. **Kesinlikle service_role veya secret key kullanma.**
 
 ## 3. Davranış
 
@@ -34,7 +36,7 @@ Her iki anahtar değişkenini eklemek zorunlu değildir: URL + **iki anahtardan 
 
 ## 4. Güvenlik sınırları
 
-Her kullanıcı kendi satırını SELECT/INSERT/UPDATE/DELETE edebilir. Anon kullanıcı doğrudan tabloya erişemez. Supabase Auth ve RLS ile veri ayrımı sağlanır. Gerçek güvenlik testi için iki ayrı test hesabıyla birbirinin kaydına erişilemediğini doğrula. Kod tek başına Supabase projesini veya tabloları oluşturmaz.
+Her kullanıcı kendi satırını SELECT/INSERT/UPDATE/DELETE edebilir. Anon kullanıcı doğrudan tabloya erişemez. Supabase Auth ve RLS ile veri ayrımı sağlanır. Gerçek güvenlik testi için iki ayrı test hesabıyla birbirinin kaydına erişilemediğini doğrula. Gerçek Supabase projesi ve tablo oluşturulmuştur. SQL güvenlik kontrollerinde `anon` için okuma yetkisi olmadığı ve 4 adet kullanıcı bazlı RLS kuralı bulunduğu görülmüştür. Gerçek giriş ve cihazlar arası akışın testi, kullanıcı tarafından doğrulanmış iki test hesabıyla yapılmalıdır.
 
 ## 5. Eğitim içeriği
 
