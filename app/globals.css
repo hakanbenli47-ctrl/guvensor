@@ -93,3 +93,22 @@
 .settings-clock span{font-size:11px;font-weight:800;color:#596781}
 .settings-clock input{max-width:200px;height:42px;border:1px solid #d8deec;border-radius:8px;padding:0 12px;background:white;color:#344566}
 .settings-clock small{font-size:10px;color:#8b99ad;line-height:1.7}
+
+/* Tutor-style post-test answer analysis */
+.results{max-width:960px;}
+.result-review{margin:30px auto 24px;text-align:left;border-top:1px solid var(--line);padding-top:24px}
+.result-review>h3{font-size:18px;letter-spacing:-.5px;margin:0 0 6px}
+.result-review>p{font-size:12px;color:#77869d;margin:0 0 22px}
+.review-item{padding:19px 20px;margin:14px 0;border:1px solid #e6e9f2;border-radius:13px;text-align:left;background:#fff}
+.review-item-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.review-item-head strong{font-size:12px;color:#55647c}
+.review-item-head span{font-size:10px;padding:5px 9px;border-radius:8px;font-weight:900}
+.review-wrong{color:#b04444;background:#fff0ef}.review-empty{background:#f2f3f6;color:#7a879c}
+.review-prompt{font-weight:800;margin:15px 0;line-height:1.8;font-size:13px}
+.review-item>p{font-size:12px;color:#67768c;margin:6px 0;overflow-wrap:anywhere}
+.review-item>p b{color:#243652}
+.review-explanation{padding:12px 15px;background:#eef8f1;border-radius:9px;color:#276744;margin:15px 0}
+.review-explanation strong{font-size:11px}
+.review-explanation p{font-size:12px;margin:7px 0 0;line-height:1.8}
+.review-all-correct{background:#effaf3;padding:15px;border-radius:10px;color:#358257;font-size:12px}
+@media(max-width:540px){.review-item{padding:13px}.result-review{margin:20px 0}.review-item-head{align-items:start}}
