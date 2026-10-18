@@ -112,3 +112,24 @@
 .review-explanation p{font-size:12px;margin:7px 0 0;line-height:1.8}
 .review-all-correct{background:#effaf3;padding:15px;border-radius:10px;color:#358257;font-size:12px}
 @media(max-width:540px){.review-item{padding:13px}.result-review{margin:20px 0}.review-item-head{align-items:start}}
+
+/* Telafi merkezi ve ders duraklatma */
+.academy-pause-banner,.academy-makeup{margin:16px 0;border-radius:16px;padding:20px 22px;border:1px solid #e0e5f3;background:#fff;box-shadow:0 6px 20px #47558c08}
+.academy-pause-banner{display:flex;justify-content:space-between;align-items:center;gap:18px;background:#f2f6ff;border-color:#d7dff5}
+.academy-pause-banner h2,.academy-makeup h2{font-size:17px;margin:6px 0 8px;letter-spacing:-.4px}
+.academy-pause-banner p,.academy-makeup p{font-size:11px;color:#677891;line-height:1.8;margin:0}
+.academy-pause-actions{display:flex;gap:8px;flex-wrap:wrap}
+.academy-pause-actions .btn{white-space:nowrap}
+.academy-makeup{background:#fffaf3;border-color:#efe0c4}
+.academy-makeup .section-heading{margin-bottom:15px}
+.academy-makeup-list{display:grid;gap:9px}
+.academy-makeup-row{border:1px solid #f0e5d2;background:white;border-radius:10px;padding:13px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.academy-makeup-row>div{display:grid;gap:5px}
+.academy-makeup-row small{font-size:10px;color:#916f3a}
+.academy-makeup-row strong{font-size:12px;color:#333e56}
+.academy-more{margin-top:13px}
+.lesson-resume-notice{margin:10px 0 16px;padding:13px 15px;background:#e8edf8;border-radius:8px;font-size:11px;color:#394e86;line-height:1.7}
+.lesson-resume-notice a{color:#2946b6;font-weight:800;margin-left:7px}
+.chapter-check{margin-top:16px}.chapter-check:disabled{opacity:.6;cursor:default}
+@media(max-width:750px){.academy-pause-banner{flex-direction:column;align-items:stretch}.academy-pause-actions{flex-direction:column}.academy-pause-actions .btn{width:100%}}
+@media(max-width:420px){.academy-makeup-row{align-items:flex-start}.academy-makeup-row strong{line-height:1.5}.academy-makeup-row button{flex-shrink:0}}
