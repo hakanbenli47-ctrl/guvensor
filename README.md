@@ -25,6 +25,8 @@ Varsayılan adres: http://localhost:3000
 - Özgün, elle yazılmış soru bankasının hazır olan konularda öncelikli kullanımı.
 - Çözüm sonunda yanlış ve boş soruları açıklamalı inceleme, konu pekiştirmeye yönlendirme.
 - İsteğe bağlı günlük başlama saati; 4x45 dakikalık çalışma ve ara molaları.
+- **Telafi merkezi:** Bir önceki günden kalan plan oturumları yeni günün programından silinmez; tarihlerine göre telafi kuyruğunda listelenir ve tamamlanana kadar kalır. Telafi, günlük programa ek çalışmadır; program tarihlerini kendiliğinden ötelemez.
+- **Kaldığın yerden devam:** Anlatım bölümlerinde “Bu bölümü okudum”, oturumda “Kaydet ve ara ver” seçenekleri; cevap ve konu ilerlemesinin bulut kaydı ve bir sonraki girişte devam kartı. Birden fazla eşzamanlı yarım oturum desteklenmez: yeni oturum başlatma eski yarım oturum için onay ister.
 - Mobil uyumlu panel ve PDF olarak yazdırılabilir konu anlatımı.
 
 ## İçerik güvenilirliği ve sınırlar
