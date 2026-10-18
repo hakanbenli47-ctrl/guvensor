@@ -126,6 +126,34 @@ function Dashboard({user}:{user:User}){
   },250);
   return()=>clearTimeout(timer);
  },[progress,drafts,session,hydrated,user.id,retrySave,localCacheKey]);
+ // When the app is backgrounded, try an immediate cloud write as well.
+ // The local pending copy remains available if the mobile OS terminates the tab.
+ useEffect(()=>{
+  if(!hydrated||!supabase)return;
+  const client=supabase;
+  let lastFlush=0;
+  const flush=()=>{
+   const time=Date.now();
+   if(time-lastFlush<250)return;
+   lastFlush=time;
+   const revision=++saveRevision.current;
+   const payload={version:2,progress,drafts:combinedDrafts(drafts,session,time),session:null};
+   try{localStorage.setItem(localCacheKey,JSON.stringify({pending:true,savedAt:time,payload}));}catch{}
+   saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{
+    const {error}=await client.from(PROGRESS_TABLE).upsert({user_id:user.id,payload,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+    if(error)throw error;
+   });
+   void saveQueue.current.then(()=>{
+    if(revision!==saveRevision.current)return;
+    setSyncError("");setSyncStatus("saved");
+    try{localStorage.setItem(localCacheKey,JSON.stringify({pending:false,savedAt:time,payload}));}catch{}
+   }).catch(err=>{if(revision===saveRevision.current)setSyncError(err instanceof Error?err.message:"Bulut bağlantısında kayıt hatası.");});
+  };
+  const onVisibility=()=>{if(document.visibilityState==="hidden")flush();};
+  document.addEventListener("visibilitychange",onVisibility);
+  window.addEventListener("pagehide",flush);
+  return()=>{document.removeEventListener("visibilitychange",onVisibility);window.removeEventListener("pagehide",flush);};
+ },[progress,drafts,session,hydrated,user.id,localCacheKey]);
  async function logout(){
   if(!supabase)return;
   await saveQueue.current.catch(()=>undefined);
