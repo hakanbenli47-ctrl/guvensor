@@ -82,9 +82,9 @@ function Dashboard({user}:{user:User}){
  },[progress,session,hydrated,user.id,retrySave]);
  async function logout(){
   if(!supabase)return;
+  await saveQueue.current.catch(()=>undefined);
   const {error}=await supabase.from(PROGRESS_TABLE).upsert({user_id:user.id,payload:{version:1,progress,session:session?.step==="result"?null:session},updated_at:new Date().toISOString()},{onConflict:"user_id"});
   if(error){setSyncError("Çıkış öncesi kayıt başarısız: "+error.message);return;}
-  await saveQueue.current.catch(()=>undefined);
   await supabase.auth.signOut();
  }
  useEffect(()=>{const timer=setInterval(()=>{setNow(Date.now());setToday(dateKey())},1000);return()=>clearInterval(timer)},[]);
