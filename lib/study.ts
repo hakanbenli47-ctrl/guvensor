@@ -4,7 +4,7 @@ export interface Question {id:string;topicId:string;prompt:string;choices:string
 export interface AnswerRecord {questionId:string;topicId:string;correct:boolean;selected:number;seconds:number;at:string;kind:"ders"|"deneme"|"tekrar";}
 export interface ExamRecord {id:string;track:"TYT"|"AYT"|"Mini"|"Seviye";at:string;correct:number;incorrect:number;empty:number;net:number;seconds:number;}
 export interface PlacementRecord {completedAt:string;correct:number;incorrect:number;empty:number;area:Record<string,{correct:number;total:number}>;}
-export interface StudyState {answers:AnswerRecord[];exams:ExamRecord[];minutes:Record<string,number>;finished:Record<string,string>;activeTopicId?:string;placement?:PlacementRecord;};
+export interface StudyState {answers:AnswerRecord[];exams:ExamRecord[];minutes:Record<string,number>;finished:Record<string,string>;activeTopicId?:string;placement?:PlacementRecord;startTime?:string;};
 export const EMPTY:StudyState={answers:[],exams:[],minutes:{},finished:{}};
 const hash=(text:string)=>{let h=2166136261;for(let i=0;i<text.length;i++)h=Math.imul(h^text.charCodeAt(i),16777619);return h>>>0;};
 const rand=(seed:number,max:number)=>hash(String(seed))%max;
