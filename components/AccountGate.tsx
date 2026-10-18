@@ -62,8 +62,27 @@ function AuthScreen({onSignedIn}:{onSignedIn:(user:User)=>void}){
  </main>;
 }
 
+function RecoveryScreen({onDone}:{onDone:()=>void}){
+ const [password,setPassword]=useState("");
+ const [confirm,setConfirm]=useState("");
+ const [busy,setBusy]=useState(false);
+ const [error,setError]=useState("");
+ const submit=async(e:FormEvent<HTMLFormElement>)=>{
+  e.preventDefault();if(!supabase)return;
+  if(password.length<8){setError("En az 8 karakter belirle.");return;}
+  if(password!==confirm){setError("Şifreler eşleşmiyor.");return;}
+  setBusy(true);setError("");
+  const {error}=await supabase.auth.updateUser({password});
+  setBusy(false);
+  if(error){setError(error.message);return;}
+  onDone();
+ };
+ return <main className="auth-page"><section className="auth-panel recovery-card"><div className="auth-brand"><span className="auth-brand-icon">Y+</span><strong>YKS Akademi</strong></div><h1>Yeni şifreni belirle</h1><p>Güvenli bir şifre belirledikten sonra çalışma alanına döneceksin.</p><form className="auth-form" onSubmit={submit}><label htmlFor="new-password">Yeni şifre</label><input id="new-password" type="password" autoComplete="new-password" minLength={8} value={password} onChange={e=>setPassword(e.target.value)} required/><label htmlFor="confirm-password">Yeni şifre (tekrar)</label><input id="confirm-password" type="password" autoComplete="new-password" minLength={8} value={confirm} onChange={e=>setConfirm(e.target.value)} required/>{error?<div className="auth-alert error">{error}</div>:null}<button className="auth-submit" disabled={busy} type="submit">{busy?"Kaydediliyor…":"Şifremi güncelle"}</button></form></section></main>;
+}
+
 export default function AccountGate({children}:{children:(user:User)=>ReactNode}){
  const [user,setUser]=useState<User|null>(null);
+ const [recovery,setRecovery]=useState(false);
  const [loading,setLoading]=useState(true);
  useEffect(()=>{
   if(!supabase){setLoading(false);return;}
@@ -74,7 +93,8 @@ export default function AccountGate({children}:{children:(user:User)=>ReactNode}
     if(!error)setUser(data.session?.user??null);
     setLoading(false);
   }).catch(()=>{if(alive)setLoading(false)});
-  const {data:{subscription}}=client.auth.onAuthStateChange((_event,session)=>{
+  const {data:{subscription}}=client.auth.onAuthStateChange((event,session)=>{
+   if(event==="PASSWORD_RECOVERY")setRecovery(true);
    if(!alive)return;
    setUser(previous=>previous?.id===session?.user.id?previous:session?.user??null);
    setLoading(false);
@@ -82,5 +102,6 @@ export default function AccountGate({children}:{children:(user:User)=>ReactNode}
   return()=>{alive=false;subscription.unsubscribe();};
  },[]);
  if(loading)return <main className="auth-page"><div className="auth-loading">Oturum kontrol ediliyor…</div></main>;
+ if(recovery)return <RecoveryScreen onDone={()=>setRecovery(false)}/>;
  return user?<>{children(user)}</>:<AuthScreen onSignedIn={setUser}/>;
 }
