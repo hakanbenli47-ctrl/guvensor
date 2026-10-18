@@ -126,7 +126,7 @@ function Dashboard({user}:{user:User}){
   setSession(s=>s?{...s,startedAt:s.startedAt+(s.pausedAt?Date.now()-s.pausedAt:0),questionStartedAt:s.questionStartedAt+(s.pausedAt?Date.now()-s.pausedAt:0),pausedAt:undefined}:s);
   setSessionHidden(false);setPage("home");
  }
- function okayToReplaceSession(){return !session||window.confirm("Yarım kalan bir oturumun var. Yeni bir oturum başlatırsan mevcut yarım oturumun kaydı silinecek. Devam edilsin mi?");}
+ function okayToReplaceSession(){return !session||session.step==="result"||window.confirm("Yarım kalan bir oturumun var. Yeni bir oturum başlatırsan mevcut yarım oturumun kaydı silinecek. Devam edilsin mi?");}
  function startTopic(topic:Topic,block?:StudyBlock,mode:Mode="ders"){
   if(!okayToReplaceSession())return;
   setSessionHidden(false);
